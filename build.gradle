@@ -1,0 +1,36 @@
+plugins {
+    id 'java'
+    id 'org.jetbrains.intellij.platform' version '2.20.0'
+}
+
+group = 'dev.astral'
+version = '0.1.0'
+
+repositories {
+    mavenCentral()
+    intellijPlatform { defaultRepositories() }
+}
+
+dependencies {
+    intellijPlatform { rider('2025.2.3') }
+}
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+}
+
+intellijPlatform {
+    buildSearchableOptions = false
+    pluginConfiguration {
+        id = 'dev.astral.modforge'
+        name = 'Astral Mod Forge'
+        version = project.version.toString()
+        ideaVersion { sinceBuild = '252' }
+    }
+}
+
+tasks.register('coreChecks', JavaExec) {
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'dev.astral.modforge.core.CoreChecks'
+}

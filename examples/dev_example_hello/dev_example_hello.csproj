@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>dev_example_hello</AssemblyName>
+    <Version>1.0.0</Version>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BepInEx.Unity.IL2CPP" Version="[6.0.0-be.789]" IncludeAssets="compile" />
+    <PackageReference Include="SNWCreations.Il2CppInterop.Runtime" Version="[1.5.2-snw.4]" />
+    <PackageReference Include="SNWCreations.Il2CppInterop.Common" Version="[1.5.2-snw.4]" />
+    <PackageReference Include="Il2CppInterop.Runtime" Version="1.5.3" ExcludeAssets="all" PrivateAssets="all" />
+    <PackageReference Include="Il2CppInterop.Common" Version="1.5.3" ExcludeAssets="all" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="lang/zh_cn.json" LogicalName="dev.example.hello.lang.zh_cn.json" />
+    <EmbeddedResource Include="lang/en_us.json" LogicalName="dev.example.hello.lang.en_us.json" />
+  </ItemGroup>
+</Project>
