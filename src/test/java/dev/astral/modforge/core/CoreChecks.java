@@ -246,6 +246,79 @@ public final class CoreChecks {
             check(staticPlan.ready() && staticPlan.sources().stream().anyMatch(
                     u -> u.file().equals(src.resolve("Framework/Helpers/StaticNeeded.cs"))),
                     "using static Framework helper is retained even without a qualified invocation");
+            // v0.3.0: embed checked defaults into C# literals, including comma-separated fields.
+            Files.writeString(src.resolve("Features/Configuration/DisplayConfiguration.cs"), """
+                    using BepInEx.Configuration;
+                    namespace Sample.Features.Configuration {
+                      internal static class DisplayConfiguration {
+                        internal static ConfigEntry<float> PanelWidth = null!, PanelHeight = null!;
+                        internal static ConfigEntry<int> LabelSize = null!;
+                        internal static ConfigEntry<string> LabelColor = null!;
+                        internal static void Bind(ConfigFile config) {
+                          PanelWidth = config.Bind("UI", "Width", 640f, new ConfigDescription("size", new AcceptableValueRange<float>(320f, 900f)));
+                          PanelHeight = config.Bind("UI", "Height", -1f);
+                          LabelSize = config.Bind("UI", "LabelSize", 32);
+                          LabelColor = config.Bind("UI", "LabelColor", "ABCD12");
+                        }
+                      }
+                    }
+                    """);
+            Files.writeString(src.resolve("Features/UsesDefaults.cs"), """
+                    using Sample.Features.Configuration;
+                    namespace Sample.Features {
+                      class UsesDefaults { internal static void Initialize() {
+                        float w = DisplayConfiguration.PanelWidth.Value;
+                        float h = DisplayConfiguration.PanelHeight.Value;
+                        int n = DisplayConfiguration.LabelSize.Value;
+                        string c = DisplayConfiguration.LabelColor.Value;
+                      } }
+                    }
+                    """);
+            CSharpIndex configIndex = new CSharpIndex(src);
+            ForgeSpec embedConfig = new ForgeSpec(src, "dev.test.embed-config", List.of(Path.of("Features/UsesDefaults.cs")),
+                    base.resolve("out"),ForgeSpec.LanguageMode.EMBEDDED,"en_us","","",false,false,null,true,true);
+            DependencyPlanner.Plan embedConfigPlan = new DependencyPlanner(configIndex).plan(embedConfig);
+            check(embedConfigPlan.ready(),"embedded literal configuration should pass: " + embedConfigPlan.errors());
+            String inlineDefaults = embedConfigPlan.rewrittenSources().get(src.resolve("Features/UsesDefaults.cs"));
+            check(inlineDefaults.contains("w = 640f") && inlineDefaults.contains("h = -1f"),
+                    "comma-separated float defaults replaced with literals");
+            check(inlineDefaults.contains("n = 32") && inlineDefaults.contains("c = \"ABCD12\""),
+                    "integer and string defaults replaced with literals");
+            check(embedConfigPlan.sources().stream().noneMatch(u -> u.file().toString().contains("DisplayConfiguration.cs")),
+                    "configuration class excluded when defaults are embedded");
+            String generated = ModTemplates.plugin(embedConfig,"Sample",List.of(),List.of());
+            String localization = ModTemplates.localization(embedConfig,"Sample");
+            check(!generated.contains("Config.Save()") && generated.contains("ModLocalization.Initialize(Log)") &&
+                    !generated.contains("Config.Bind") && !generated.contains("AddComponent<ForgeTickBehaviour>"),
+                    "embedded-default plugin does not register or save configuration");
+            check(localization.contains("GetManifestResourceStream") && localization.contains("Locale = \"en_us\"") &&
+                    !localization.contains("WriteAllText") && !localization.contains("CreateDirectory") &&
+                    !localization.contains("Config.Bind"),
+                    "embedded language reads compiled JSON without creating config directories");
+            ForgeExporter.Result embeddedExport = new ForgeExporter().export(embedConfig);
+            check(Files.readString(embeddedExport.directory().resolve("export-manifest.properties"))
+                    .contains("embeddedDefaults=true"), "embedded config policy recorded in manifest");
+            check(Files.readString(embeddedExport.directory().resolve("MOD.csproj"))
+                    .contains("EmbeddedResource Include=\"lang/en_us.json\""),
+                    "embedded resources included in exported C# assembly");
+            ForgeSpec persistentConfig = new ForgeSpec(src,"dev.test.embed-off", List.of(Path.of("Features/UsesDefaults.cs")),
+                    base.resolve("out"), ForgeSpec.LanguageMode.EMBEDDED,"zh_cn","","",false,false,null,true,false);
+            check(!new DependencyPlanner(configIndex).plan(persistentConfig).ready(),
+                    "non-boolean configuration remains unsupported without embed option");
+            Files.writeString(src.resolve("Features/WritesConfig.cs"),"""
+                    namespace Sample.Features { class WritesConfig { internal static void Initialize() {
+                      var x = new BepInEx.Configuration.ConfigFile("generated.cfg", true);
+                    } } }
+                    """);
+            ForgeSpec writesFile = new ForgeSpec(src,"dev.test.config-write",List.of(Path.of("Features/WritesConfig.cs")),
+                    base.resolve("out"),ForgeSpec.LanguageMode.EMBEDDED,"zh_cn","","",false,false,null,true,true);
+            check(new DependencyPlanner(new CSharpIndex(src)).plan(writesFile).errors().stream()
+                    .anyMatch(x -> x.contains("Persistent configuration")), "known runtime configuration writes blocked");
+            Files.writeString(src.resolve("Features/Configuration/DisplayConfiguration.cs"),
+                    Files.readString(src.resolve("Features/Configuration/DisplayConfiguration.cs"))
+                            .replace("PanelWidth = config.Bind(\"UI\", \"Width\", 640f,", "PanelWidth = config.Bind(\"UI\", \"Width\", GetDefault(),"));
+            check(!new DependencyPlanner(new CSharpIndex(src)).plan(embedConfig).ready(),
+                    "complex non-literal defaults rejected instead of guessing");
 
             boolean protectedOutput = false;
             try { new ForgeSpec(src,"dev.test.badpath",List.of(Path.of("Features/AutoSwitch.cs")),

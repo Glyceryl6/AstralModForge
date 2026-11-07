@@ -36,7 +36,7 @@ public class Main {
                 mode,options.getOrDefault("locale","zh_cn"),options.getOrDefault("load",""),
                 options.getOrDefault("update",""),!options.containsKey("no-build"),
                 options.containsKey("copy"),options.containsKey("game")?Path.of(options.get("game")):null,
-                options.containsKey("export-source"));
+                options.containsKey("export-source"),options.containsKey("embed-default-config"));
         ForgeExporter.Result r=exporter.export(spec);
         System.out.println("Project / 工程: "+r.directory());
         System.out.println("Report / 报告: "+r.report());
@@ -54,6 +54,6 @@ public class Main {
             "  export --id=dev.example.mod --project=/path/to/csproj-dir --classes=Features/A.cs,Features/B.cs\n"+
             "      [--lang=embedded|inline] [--locale=zh_cn|en_us]\n"+
             "      [--load=Namespace.Type::Initialize;Namespace.Type::Init] [--update=Namespace.Type::Tick]\n"+
-            "      [--output=/path/to/output] [--export-source] [--no-build] [--copy --game=/path/to/game]");
+            "      [--output=/path/to/output] [--export-source] [--embed-default-config] [--no-build] [--copy --game=/path/to/game]");
     }
 }

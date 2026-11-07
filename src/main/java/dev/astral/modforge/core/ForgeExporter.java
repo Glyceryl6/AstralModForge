@@ -15,7 +15,7 @@ public class ForgeExporter {
     public record Result(Path directory, Path report, Path dll, boolean compiled, boolean deployed, List<String> notes) {}
     private static final Pattern NAMESPACE = Pattern.compile("\\bnamespace\\s+([A-Za-z_][\\w.]*)\\s*[;{]");
     private static final Pattern LANGUAGE = Pattern.compile("\\b(?:ModLanguageService|ModLocalization)\\s*\\.\\s*(\\w+)");
-    private static final Set<String> LANGUAGE_METHODS = Set.of("Translate", "T");
+    private static final Set<String> LANGUAGE_METHODS = Set.of("Translate", "T", "CurrentLocale");
 
     public Result export(ForgeSpec spec) throws Exception {
         return export(spec, ExportObserver.silent());
@@ -52,7 +52,8 @@ public class ForgeExporter {
                 "源工程 / Source: `" + spec.sourceRoot() + "`\n" +
                 "输出目录 / Output: `" + target + "`\n" +
                 "导出源码 / Export source: `" + spec.exportSource() + "`\n" +
-                "模式 / Language: `" + spec.languageMode() + ":" + spec.locale() + "`\n\n" +
+                "模式 / Language: `" + spec.languageMode() + ":" + spec.locale() + "`\n" +
+                "内嵌默认配置 / Embed defaults: `" + spec.embedDefaultConfig() + "`\n\n" +
                 "## 依赖来源 / Copied classes\n");
         List<CSharpIndex.Unit> sorted = new ArrayList<>(plan.sources());
         sorted.sort(Comparator.comparing(u -> index.root().relativize(u.file()).toString()));
@@ -67,6 +68,8 @@ public class ForgeExporter {
         List<String> notes = new ArrayList<>();
         notes.addAll(plan.warnings()); notes.addAll(locale.warnings());
         notes.add("开关在独立 MOD 中默认开启；不复制宿主的 Settings 与 Configuration 类。");
+        if (spec.embedDefaultConfig())
+            notes.add("内嵌默认配置：语言与已识别的设置值直接编入 DLL，不生成 .cfg 或默认 JSON；已存在的旧配置不会自动删除。");
         notes.add("请验证原 HotfixWatcher 生命周期调用是否全部移植，特别是 Harmony 或事件注册。");
         notes.add("C# 类型依赖收集是静态启发式分析，编译与游戏加载才是最终验证。");
         notes.add("避免与原 MOD 同时启用重复功能；源项目 SDK 依赖可能需要单独部署。");
@@ -95,6 +98,7 @@ public class ForgeExporter {
             StringBuilder manifest = new StringBuilder("# Astral Mod Forge v0.2.0 / 导出清单\n" +
                     "id=" + spec.modId() + "\n" + "language=" + spec.languageMode() + "\n" +
                     "locale=" + spec.locale() + "\n" + "source=" + spec.exportSource() + "\n" +
+                    "embeddedDefaults=" + spec.embedDefaultConfig() + "\n" +
                     "load=" + String.join(";", plan.loads().stream().map(e -> e.type()+"::"+e.method()).toList()) + "\n" +
                     "update=" + String.join(";", plan.updates().stream().map(e -> e.type()+"::"+e.method()).toList()) + "\n");
             for (CSharpIndex.Unit unit : sorted)

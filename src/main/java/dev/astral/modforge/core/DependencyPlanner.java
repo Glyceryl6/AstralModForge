@@ -70,12 +70,12 @@ public class DependencyPlanner {
         // First pass prevents a discarded Framework helper from introducing unrelated settings errors.
         FrameworkPruner.Result pruned = pruner.prune(index, all, Map.of());
         all = new LinkedHashSet<>(pruned.sources());
-        SettingsDetacher.Result settings = new SettingsDetacher().transform(index, all);
+        SettingsDetacher.Result settings = new SettingsDetacher().transform(index, all, spec.embedDefaultConfig());
         // A boolean switch or a removed settings import may make further framework files unnecessary.
         FrameworkPruner.Result refined = pruner.prune(index, all, settings.sources());
         if (refined.sources().size() != all.size()) {
             all = new LinkedHashSet<>(refined.sources());
-            settings = new SettingsDetacher().transform(index, all);
+            settings = new SettingsDetacher().transform(index, all, spec.embedDefaultConfig());
         }
         Set<Path> removedPaths = new LinkedHashSet<>(pruned.removed());
         removedPaths.addAll(refined.removed());
@@ -87,6 +87,10 @@ public class DependencyPlanner {
             errors.add("勾选的文件均不属于可独立运行的功能 / No executable feature after Framework pruning");
         warnings.addAll(settings.warnings());
         errors.addAll(settings.errors());
+        if (spec.embedDefaultConfig()) {
+            errors.addAll(new ConfigPersistenceGuard().inspect(index, all, settings.sources()));
+            warnings.add("默认配置内嵌：导出的插件不会自动写入 .cfg 或语言 JSON；自定义文件写入仍需开发者检查。");
+        }
         Set<CSharpIndex.Unit> selectedAfterPruning = new LinkedHashSet<>(initial);
         selectedAfterPruning.retainAll(all);
 

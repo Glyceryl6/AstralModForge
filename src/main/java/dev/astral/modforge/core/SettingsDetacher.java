@@ -13,7 +13,7 @@ public class SettingsDetacher {
     public record Result(Map<Path, String> sources, List<String> warnings, List<String> errors) {}
 
     private static final Pattern ENTRY = Pattern.compile(
-            "\\bConfigEntry\\s*<\\s*(bool|Boolean|int|float|double|string)\\s*>\\s+(\\w+)");
+            "\\bConfigEntry\\s*<\\s*(bool|Boolean|int|float|double|string)\\s*>\\s+([^;]+);", Pattern.DOTALL);
     private static final Pattern CONFIG_VALUE = Pattern.compile(
             "\\b((?:global::)?(?:[A-Za-z_]\\w*\\.)*(?:Plugin|[A-Za-z_]\\w*Configuration))\\s*\\.\\s*(\\w+)\\s*\\.\\s*Value\\b");
     private static final Pattern CONFIG_OBJECT = Pattern.compile(
@@ -36,7 +36,13 @@ public class SettingsDetacher {
     }
 
     public Result transform(CSharpIndex index, Collection<CSharpIndex.Unit> sources) {
+        return transform(index, sources, false);
+    }
+
+    public Result transform(CSharpIndex index, Collection<CSharpIndex.Unit> sources, boolean embedDefaults) {
+        ConfigDefaultResolver resolver = new ConfigDefaultResolver();
         Map<String, String> propertyTypes = new HashMap<>();
+        Map<String, String> propertyDefaults = new HashMap<>();
         Set<String> hostNamespaces = new HashSet<>();
         Set<String> managedTypeNames = new HashSet<>();
         for (CSharpIndex.Unit unit : index.units().values()) {
@@ -44,18 +50,23 @@ public class SettingsDetacher {
             if (!unit.namespace().isBlank() &&
                     (isUiSettings(index, unit) || index.root().relativize(unit.file()).toString().replace('\\', '/').contains("/Configuration/")))
                 hostNamespaces.add(unit.namespace());
+            Map<String, String> literals = resolver.literals(unit.source());
             for (String type : unit.declared()) {
                 managedTypeNames.add(type);
                 Matcher matches = ENTRY.matcher(unit.code());
                 while (matches.find()) {
-                    String name = matches.group(2);
-                    propertyTypes.put(type + "." + name, matches.group(1));
+                    for (String name : declaredNames(matches.group(2))) {
+                        String key = type + "." + name;
+                        propertyTypes.put(key, matches.group(1));
+                        if (literals.containsKey(name)) propertyDefaults.put(key, literals.get(name));
+                    }
                 }
             }
         }
         Map<Path, String> output = new LinkedHashMap<>();
         List<String> warnings = new ArrayList<>(), errors = new ArrayList<>();
         Set<String> enabledNames = new TreeSet<>();
+        Map<String, String> inlinedDefaults = new TreeMap<>();
         for (CSharpIndex.Unit unit : sources) {
             String code = unit.source();
             String masked = CSharpIndex.maskLiteralsAndComments(code);
@@ -72,17 +83,27 @@ public class SettingsDetacher {
                             " (" + index.root().relativize(unit.file()) + ")");
                     continue;
                 }
-                if (!"bool".equals(type) && !"Boolean".equals(type)) {
-                    errors.add("非布尔设置不能默认开启，请单独处理 / Non-boolean setting: " + qualifier + "." + name);
-                    continue;
-                }
                 if (isWrite(masked, m.start(), m.end())) {
                     errors.add("设置值被写入或按引用传递，不能安全固定 / Setting write or ref: " + qualifier + "." + name);
                     continue;
                 }
-                replacements.add(new Replacement(m.start(), m.end(), "true"));
+                String replacement;
+                if ("bool".equals(type) || "Boolean".equals(type)) {
+                    replacement = "true";
+                    enabledNames.add(qualifier + "." + name);
+                } else if (embedDefaults) {
+                    replacement = propertyDefaults.get(owner + "." + name);
+                    if (replacement == null || !resolver.valid(type, replacement)) {
+                        errors.add("无法从 Bind 取得安全的默认值 / Missing literal default: " + qualifier + "." + name);
+                        continue;
+                    }
+                    inlinedDefaults.put(qualifier + "." + name, replacement);
+                } else {
+                    errors.add("非布尔设置需要勾选内嵌默认配置 / Non-boolean setting: " + qualifier + "." + name);
+                    continue;
+                }
+                replacements.add(new Replacement(m.start(), m.end(), replacement));
                 rewrittenMembers.add(m.start(2));
-                enabledNames.add(qualifier + "." + name);
             }
             // No lingering ConfigEntry object may be copied, including passing a setting to a helper.
             Matcher raw = CONFIG_OBJECT.matcher(masked);
@@ -120,7 +141,28 @@ public class SettingsDetacher {
         if (!enabledNames.isEmpty())
             warnings.add("已将 " + enabledNames.size() + " 个布尔开关固定为开启，不生成设置按钮或配置绑定 / " +
                     "Boolean toggles are always enabled: " + enabledNames);
+        if (!inlinedDefaults.isEmpty())
+            warnings.add("已内嵌 " + inlinedDefaults.size() + " 项非布尔默认配置 / Inlined default settings: " + inlinedDefaults);
         return new Result(Map.copyOf(output), List.copyOf(warnings), List.copyOf(new LinkedHashSet<>(errors)));
+    }
+
+    /** C# allows ConfigEntry<float> A = null!, B = null! in one declaration. */
+    private static Set<String> declaredNames(String declaration) {
+        Set<String> names = new LinkedHashSet<>();
+        int depth = 0, bracket = 0, start = 0;
+        for (int i = 0; i <= declaration.length(); i++) {
+            char c = i == declaration.length() ? ',' : declaration.charAt(i);
+            if (c == '(' || c == '{') depth++;
+            else if (c == ')' || c == '}') depth--;
+            else if (c == '[') bracket++;
+            else if (c == ']') bracket--;
+            else if (c == ',' && depth == 0 && bracket == 0) {
+                Matcher name = Pattern.compile("^\\s*([A-Za-z_]\\w*)").matcher(declaration.substring(start, i));
+                if (name.find()) names.add(name.group(1));
+                start = i + 1;
+            }
+        }
+        return names;
     }
 
     private static boolean isWrite(String masked, int start, int end) {

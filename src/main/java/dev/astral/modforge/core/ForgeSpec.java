@@ -9,7 +9,8 @@ import java.util.regex.Pattern;
 public record ForgeSpec(Path sourceRoot, String modId, List<Path> selected, Path destination,
                         LanguageMode languageMode, String locale,
                         String loadEntry, String updateEntry,
-                        boolean build, boolean copyToGame, Path gameRoot, boolean exportSource) {
+                        boolean build, boolean copyToGame, Path gameRoot, boolean exportSource,
+                        boolean embedDefaultConfig) {
     private static final Pattern VALID_ID = Pattern.compile("[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*");
 
     public enum LanguageMode { EMBEDDED, INLINE }
@@ -19,7 +20,15 @@ public record ForgeSpec(Path sourceRoot, String modId, List<Path> selected, Path
                      LanguageMode languageMode, String locale, String loadEntry, String updateEntry,
                      boolean build, boolean copyToGame, Path gameRoot) {
         this(sourceRoot, modId, selected, destination, languageMode, locale,
-                loadEntry, updateEntry, build, copyToGame, gameRoot, true);
+                loadEntry, updateEntry, build, copyToGame, gameRoot, true, false);
+    }
+
+    /** Compatibility with v0.2.0: persistent per-MOD configuration remains the default. */
+    public ForgeSpec(Path sourceRoot, String modId, List<Path> selected, Path destination,
+                     LanguageMode languageMode, String locale, String loadEntry, String updateEntry,
+                     boolean build, boolean copyToGame, Path gameRoot, boolean exportSource) {
+        this(sourceRoot, modId, selected, destination, languageMode, locale,
+                loadEntry, updateEntry, build, copyToGame, gameRoot, exportSource, false);
     }
 
     public ForgeSpec {

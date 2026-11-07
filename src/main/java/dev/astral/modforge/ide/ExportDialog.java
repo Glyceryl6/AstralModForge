@@ -22,6 +22,7 @@ class ExportDialog extends DialogWrapper {
     private final JCheckBox deploy = new JCheckBox(I18n.get("copy"));
     private final JCheckBox build = new JCheckBox(I18n.get("build"), true);
     private final JCheckBox exportSource = new JCheckBox(I18n.get("export.source"), false);
+    private final JCheckBox embedDefaultConfig = new JCheckBox(I18n.get("config.embed"), false);
     private ClassSelectionTree fileTree;
     private String indexError;
 
@@ -57,7 +58,7 @@ class ExportDialog extends DialogWrapper {
         add(upper,c,5,I18n.get("output"),pathRow(output));
         add(upper,c,6,I18n.get("path"),pathRow(game));
         JPanel flags = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        flags.add(build); flags.add(exportSource); flags.add(deploy);
+        flags.add(build); flags.add(exportSource); flags.add(deploy); flags.add(embedDefaultConfig);
         c.gridx = 0; c.gridy = 7; c.gridwidth = 2; upper.add(flags,c);
         result.add(upper,BorderLayout.NORTH);
 
@@ -101,7 +102,7 @@ class ExportDialog extends DialogWrapper {
                 mode.getSelectedIndex() == 0 ? ForgeSpec.LanguageMode.EMBEDDED : ForgeSpec.LanguageMode.INLINE,
                 Objects.requireNonNull((String)language.getSelectedItem()),load.getText(),update.getText(),
                 build.isSelected(),deploy.isSelected(),game.getText().isBlank()?null:Path.of(game.getText().trim()),
-                exportSource.isSelected());
+                exportSource.isSelected(),embedDefaultConfig.isSelected());
     }
 
     private void analyze() {
