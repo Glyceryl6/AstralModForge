@@ -1,7 +1,6 @@
 package dev.astral.modforge.core;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.regex.Matcher;
@@ -11,29 +10,19 @@ import java.util.regex.Pattern;
  * Dependencies and lifecycle are deliberately separate: references != invocations.
  * 依赖闭包不能代替生命周期；查不到可靠入口时阻止错误的一键导出。
  */
-public final class DependencyPlanner {
+public class DependencyPlanner {
     public record Entry(String type, String method, boolean isStatic, boolean takesTime, String kind) {
-        String call(String variable) {
-            return (isStatic ? type : variable) + "." + method + "(" + (takesTime ? "UnityEngine.Time.realtimeSinceStartup" : "") + ");";
-        }
+        String call(String variable) { return (isStatic ? type : variable) + "." + method + "(" + (takesTime ? "UnityEngine.Time.realtimeSinceStartup" : "") + ");"; }
     }
-
     public record Plan(Set<CSharpIndex.Unit> sources, List<String> warnings, List<String> errors,
-                       List<Entry> loads, List<Entry> updates, Map<String, String> configEntries) {
-        public boolean ready() {
-            return errors.isEmpty();
-        }
+                       List<Entry> loads, List<Entry> updates, Map<Path,String> rewrittenSources) {
+        public boolean ready() { return errors.isEmpty(); }
     }
 
     private final CSharpIndex index;
-    private static final Pattern ENTRY = Pattern.compile("\\b(public|internal|private|protected)?\\s*(static\\s+)?void\\s+([A-Za-z_]\\w*)\\s*\\(([^)]*)\\)");
-    private static final Pattern PLUGIN = Pattern.compile("\\bPlugin\\s*\\.\\s*([A-Za-z_]\\w*)");
-    private static final Set<String> PLUGIN_SUPPORT = Set.of("ModLog", "Instance", "SaveSettings");
-    private static final Pattern ORIGINAL_CONFIG = Pattern.compile("\\binternal\\s+static\\s+ConfigEntry<(bool|int|float|string)>\\s+(\\w+)");
+    private static final Pattern ENTRY = Pattern.compile("\\b(public|internal|private|protected)?\\s*(static\\s+)?(?:void)\\s+([A-Za-z_]\\w*)\\s*\\(([^)]*)\\)");
 
-    public DependencyPlanner(CSharpIndex index) {
-        this.index = index;
-    }
+    public DependencyPlanner(CSharpIndex index) { this.index = index; }
 
     public Plan plan(ForgeSpec spec) throws IOException {
         List<String> errors = new ArrayList<>();
@@ -41,14 +30,11 @@ public final class DependencyPlanner {
         Set<CSharpIndex.Unit> initial = new LinkedHashSet<>();
         for (Path p : spec.selected()) {
             Path file = p.isAbsolute() ? p.normalize() : spec.sourceRoot().resolve(p).normalize();
-            if (!file.startsWith(index.root())) {
-                errors.add("文件位于项目之外 / Outside project: " + p);
-                continue;
-            }
+            if (!file.startsWith(index.root())) { errors.add("文件位于项目之外 / Outside project: " + p); continue; }
             CSharpIndex.Unit unit = index.unit(file);
             if (unit == null) errors.add("类未包含于可编译源文件索引 / Not indexed: " + p);
-            else if (unit.declared().contains("Plugin") && unit.file().getFileName().toString().equals("Plugin.cs"))
-                errors.add("不能导出源项目的 Plugin.cs；会自动生成独立入口 / Original Plugin.cs is managed");
+            else if (SettingsDetacher.isHostManaged(index, unit))
+                errors.add("不能选择原 MOD 的 Plugin、设置、配置或本地化类 / Host-managed class: " + p);
             else initial.add(unit);
         }
         if (initial.isEmpty()) errors.add("没有选择类文件 / No C# classes selected");
@@ -57,10 +43,15 @@ public final class DependencyPlanner {
         while (!queue.isEmpty() && all.size() <= 300) {
             CSharpIndex.Unit unit = queue.removeFirst();
             for (CSharpIndex.Unit dep : index.dependencies(unit, errors)) {
-                String name = dep.file().getFileName().toString();
-                if (name.equals("Plugin.cs") || name.equals("HotfixWatcher.cs") ||
-                        name.equals("ModLanguageService.cs") || name.equals("ModLocalization.cs")) continue;
+                if (SettingsDetacher.isHostManaged(index, dep)) continue;
                 if (all.add(dep)) queue.addLast(dep);
+            }
+            // Partial declarations may themselves reference dependencies. Traverse their bodies as well.
+            // partial 的另一个文件也可能调用其它类，必须继续遍历。
+            for (String type : unit.declared()) {
+                String fq = unit.namespace().isEmpty() ? type : unit.namespace() + "." + type;
+                for (CSharpIndex.Unit part : index.sameType(fq))
+                    if (!SettingsDetacher.isHostManaged(index, part) && all.add(part)) queue.addLast(part);
             }
         }
         if (all.size() > 300) errors.add("依赖闭包超过 300 个文件，请拆分功能 / Dependency closure too large");
@@ -70,31 +61,14 @@ public final class DependencyPlanner {
         for (CSharpIndex.Unit unit : new ArrayList<>(all)) {
             for (String type : unit.declared()) {
                 String fq = unit.namespace().isEmpty() ? type : unit.namespace() + "." + type;
-                all.addAll(index.sameType(fq));
+                for (CSharpIndex.Unit part : index.sameType(fq))
+                    if (!SettingsDetacher.isHostManaged(index, part)) all.add(part);
             }
         }
 
-        Set<String> unsafePluginMembers = new TreeSet<>();
-        Map<String, String> knownConfigTypes = new TreeMap<>();
-        Path originalPlugin = index.root().resolve("Plugin.cs");
-        if (Files.isRegularFile(originalPlugin)) {
-            Matcher configMatcher = ORIGINAL_CONFIG.matcher(Files.readString(originalPlugin));
-            while (configMatcher.find()) knownConfigTypes.put(configMatcher.group(2), configMatcher.group(1));
-        }
-        Map<String, String> requiredConfig = new TreeMap<>();
-        for (CSharpIndex.Unit unit : all) {
-            Matcher pm = PLUGIN.matcher(unit.code());
-            while (pm.find()) {
-                String name = pm.group(1);
-                if (PLUGIN_SUPPORT.contains(name)) continue;
-                if (knownConfigTypes.containsKey(name)) requiredConfig.put(name, knownConfigTypes.get(name));
-                else unsafePluginMembers.add(name);
-            }
-        }
-        if (!requiredConfig.isEmpty())
-            warnings.add("已为原 Plugin 的 " + requiredConfig.size() + " 个基础设置生成独立 BepInEx 配置项；请核对初始值。 / Host settings isolated");
-        if (!unsafePluginMembers.isEmpty())
-            errors.add("导出类依赖原版 Plugin 的私有功能，需先解耦 / Host-specific Plugin members: " + unsafePluginMembers);
+        SettingsDetacher.Result settings = new SettingsDetacher().transform(index, all);
+        warnings.addAll(settings.warnings());
+        errors.addAll(settings.errors());
 
         List<Entry> loads = chooseEntries(spec.loadEntry(), all, initial, Set.of("Initialize", "Install", "Init"), "Load", errors, warnings);
         List<Entry> updates = chooseEntries(spec.updateEntry(), all, initial, Set.of("Tick"), "Update", errors, warnings);
@@ -104,8 +78,7 @@ public final class DependencyPlanner {
             if (u.code().contains("Paths.ConfigPath") && (u.source().contains("\"AstralProbe\"") || u.source().contains("\"AstralProbe/")))
                 warnings.add("源码写死 AstralProbe 的配置目录，请改成每个 MOD 专属路径 / Host configuration path in " + index.root().relativize(u.file()));
         }
-        if (all.size() > initial.size())
-            warnings.add("自动包含依赖文件 " + (all.size() - initial.size()) + " 个 / Collected transitive files");
+        if (all.size() > initial.size()) warnings.add("自动包含依赖文件 " + (all.size() - initial.size()) + " 个 / Collected transitive files");
         if (all.stream().anyMatch(u -> u.source().contains("AstralParty.Modding.SDK")))
             warnings.add("引用了外部 SDK；将尝试移植源项目 ProjectReference / SDK project reference required");
         for (CSharpIndex.Unit unit : initial) {
@@ -119,7 +92,7 @@ public final class DependencyPlanner {
                 }
             }
         }
-        return new Plan(Collections.unmodifiableSet(all), List.copyOf(warnings), List.copyOf(errors), List.copyOf(loads), List.copyOf(updates), Collections.unmodifiableMap(requiredConfig));
+        return new Plan(Collections.unmodifiableSet(all), List.copyOf(warnings), List.copyOf(errors), List.copyOf(loads), List.copyOf(updates), settings.sources());
     }
 
     private List<Entry> chooseEntries(String requested, Set<CSharpIndex.Unit> all, Set<CSharpIndex.Unit> selected,
@@ -137,19 +110,19 @@ public final class DependencyPlanner {
                 List<Entry> candidates = entriesIn(all, kind, parts[0], parts[1], defaults);
                 if (candidates.size() != 1)
                     errors.add(kind + " 入口找不到或存在歧义 / Missing or ambiguous entry: " + value);
-                else result.add(candidates.getFirst());
+                else result.add(candidates.get(0));
             }
         } else {
             // Automatically wire only user-selected features, never dependency helpers.
             // 仅自动启动用户主动选择的类，依赖工具类不应意外执行其初始化方法。
             for (CSharpIndex.Unit unit : selected) {
                 List<Entry> found = entriesIn(List.of(unit), kind, null, null, defaults);
-                if (found.size() == 1) result.add(found.getFirst());
+                if (found.size() == 1) result.add(found.get(0));
                 else if (found.size() > 1)
                     warnings.add(kind + " 存在多个候选方法，请指定入口 / Ambiguous methods: " + index.root().relativize(unit.file()));
             }
         }
-        LinkedHashMap<String, Entry> unique = new LinkedHashMap<>();
+        LinkedHashMap<String,Entry> unique = new LinkedHashMap<>();
         for (Entry entry : result) unique.putIfAbsent(entry.type() + "::" + entry.method(), entry);
         return new ArrayList<>(unique.values());
     }
@@ -170,7 +143,7 @@ public final class DependencyPlanner {
                 String parameters = method.group(4).trim();
                 boolean takesTime = parameters.matches("(?:float|System\\.Single)\\s+\\w+");
                 if (!parameters.isEmpty() && !(kind.equals("Update") && takesTime)) continue;
-                found.add(new Entry(type, label, method.group(2) != null, takesTime, kind));
+                found.add(new Entry(type,label,method.group(2)!=null,takesTime,kind));
             }
         }
         return found;

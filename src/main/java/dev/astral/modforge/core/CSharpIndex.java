@@ -3,13 +3,11 @@ package dev.astral.modforge.core;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
-
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.nio.file.*;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -19,7 +17,7 @@ import java.util.stream.Stream;
  * Conservative C# source index, NOT a Roslyn/ReSharper semantic model.
  * 保守的 C# 文本索引；只做确定性的源码依赖收集，不假装能证明所有调用安全。
  */
-public final class CSharpIndex {
+public class CSharpIndex {
     private static final Pattern NAMESPACE = Pattern.compile("\\bnamespace\\s+([\\w.]+)\\s*[;{]");
     private static final Pattern DECLARATION = Pattern.compile("\\b(?:class|struct|interface|enum|record(?:\\s+class|\\s+struct)?)\\s+([A-Za-z_]\\w*)");
     private static final Pattern USING = Pattern.compile("\\busing\\s+(?:static\\s+)?([\\w.]+)\\s*;");
@@ -48,15 +46,14 @@ public final class CSharpIndex {
             for (Path file : paths.filter(Files::isRegularFile).filter(p -> p.toString().endsWith(".cs")).toList()) {
                 Path relative = this.root.relativize(file);
                 String slash = relative.toString().replace('\\', '/');
-                if (slash.matches("(?i)(?:^|.*/)(?:bin|obj|tests|.git|AstralModForge|AstralProbe.ContentPreview.Addon)/.*"))
-                    continue;
+                if (slash.matches("(?i)(?:^|.*/)(?:bin|obj|tests|.git|AstralModForge|AstralProbe.ContentPreview.Addon)/.*")) continue;
                 if (slash.startsWith("Modules/") && Files.isDirectory(this.root.resolve("Features"))) continue;
                 if (excludes.stream().anyMatch(p -> p.matcher(slash).matches())) continue;
                 String content = Files.readString(file, StandardCharsets.UTF_8).replace("\uFEFF", "");
                 String code = maskLiteralsAndComments(content);
                 Matcher ns = NAMESPACE.matcher(code);
                 String namespace = ns.find() ? ns.group(1) : "";
-                Set<String> types = groups(DECLARATION, code, 1);
+                Set<String> types = topLevelTypes(code, namespace);
                 Set<String> usings = groups(USING, code, 1);
                 Set<String> identifiers = groups(NAME, code, 0);
                 Unit unit = new Unit(file, namespace, types, usings, content, code, identifiers);
@@ -70,21 +67,10 @@ public final class CSharpIndex {
         }
     }
 
-    public Path root() {
-        return root;
-    }
-
-    public Map<Path, Unit> units() {
-        return Collections.unmodifiableMap(units);
-    }
-
-    public Unit unit(Path file) {
-        return units.get(file.toAbsolutePath().normalize());
-    }
-
-    public List<Unit> sameType(String fqName) {
-        return byQualifiedName.getOrDefault(fqName, List.of());
-    }
+    public Path root() { return root; }
+    public Map<Path, Unit> units() { return Collections.unmodifiableMap(units); }
+    public Unit unit(Path file) { return units.get(file.toAbsolutePath().normalize()); }
+    public List<Unit> sameType(String fqName) { return byQualifiedName.getOrDefault(fqName, List.of()); }
 
     public Set<Unit> dependencies(Unit from, List<String> errors) {
         Set<Unit> result = new LinkedHashSet<>();
@@ -109,11 +95,32 @@ public final class CSharpIndex {
             List<String> namespaces = candidates.keySet().stream()
                     .filter(fq -> from.usings.contains(fq.substring(0, fq.lastIndexOf('.'))))
                     .toList();
-            if (namespaces.size() == 1) result.addAll(candidates.get(namespaces.getFirst()));
+            if (namespaces.size() == 1) result.addAll(candidates.get(namespaces.get(0)));
             else errors.add("有歧义的类型 / Ambiguous C# type '" + id + "' in " + root.relativize(from.file));
         }
         result.remove(from);
         return result;
+    }
+
+    /** Exclude private nested types: they cannot be referenced as top-level shared dependencies.
+     * 剔除 private 嵌套类型，避免两个无关文件各自声明 NativeColor 时互相误关联。
+     */
+    private static Set<String> topLevelTypes(String code, String namespace) {
+        Matcher ns = NAMESPACE.matcher(code);
+        int baseDepth = 0;
+        if (ns.find() && code.charAt(ns.end() - 1) == '{') baseDepth = 1;
+        Set<String> types = new LinkedHashSet<>();
+        Matcher declarations = DECLARATION.matcher(code);
+        int depth = 0, offset = 0;
+        while (declarations.find()) {
+            for (; offset < declarations.start(); offset++) {
+                char c = code.charAt(offset);
+                if (c == '{') depth++;
+                else if (c == '}') depth--;
+            }
+            if (depth == baseDepth) types.add(declarations.group(1));
+        }
+        return types;
     }
 
     private static Set<String> groups(Pattern pattern, String content, int index) {
@@ -133,15 +140,9 @@ public final class CSharpIndex {
             if (c == '/' && i + 1 < s.length() && (s.charAt(i + 1) == '/' || s.charAt(i + 1) == '*')) {
                 boolean line = s.charAt(i + 1) == '/';
                 int end = i + 2;
-                if (line) {
-                    while (end < s.length() && s.charAt(end) != '\n') end++;
-                } else {
-                    while (end + 1 < s.length() && !(s.charAt(end) == '*' && s.charAt(end + 1) == '/')) end++;
-                    end = Math.min(s.length(), end + 2);
-                }
-                blank(result, i, end);
-                i = end;
-                continue;
+                if (line) { while (end < s.length() && s.charAt(end) != '\n') end++; }
+                else { while (end + 1 < s.length() && !(s.charAt(end) == '*' && s.charAt(end + 1) == '/')) end++; end = Math.min(s.length(), end + 2); }
+                blank(result, i, end); i = end; continue;
             }
             boolean verbatim = c == '@' && i + 1 < s.length() && s.charAt(i + 1) == '"';
             boolean quoted = c == '"' || c == '\'' || verbatim;
@@ -150,17 +151,10 @@ public final class CSharpIndex {
                 char quote = verbatim ? '"' : c;
                 i += verbatim ? 2 : 1;
                 while (i < s.length()) {
-                    if (!verbatim && s.charAt(i) == '\\') {
-                        i = Math.min(s.length(), i + 2);
-                        continue;
-                    }
+                    if (!verbatim && s.charAt(i) == '\\') { i = Math.min(s.length(), i + 2); continue; }
                     if (s.charAt(i) == quote) {
-                        if (verbatim && i + 1 < s.length() && s.charAt(i + 1) == '"') {
-                            i += 2;
-                            continue;
-                        }
-                        i++;
-                        break;
+                        if (verbatim && i + 1 < s.length() && s.charAt(i + 1) == '"') { i += 2; continue; }
+                        i++; break;
                     }
                     i++;
                 }
@@ -171,7 +165,6 @@ public final class CSharpIndex {
         }
         return new String(result);
     }
-
     private static void blank(char[] result, int start, int end) {
         for (int j = start; j < end; j++) if (result[j] != '\n' && result[j] != '\r') result[j] = ' ';
     }
@@ -181,9 +174,9 @@ public final class CSharpIndex {
         List<Pattern> patterns = new ArrayList<>();
         try {
             DocumentBuilderFactory f = DocumentBuilderFactory.newInstance();
-            f.setFeature("https://apache.org/xml/features/disallow-doctype-decl", true);
-            f.setFeature("https://xml.org/sax/features/external-general-entities", false);
-            f.setFeature("https://xml.org/sax/features/external-parameter-entities", false);
+            f.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            f.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            f.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
             f.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
             f.setXIncludeAware(false);
             Document d = f.newDocumentBuilder().parse(project.toFile());
@@ -211,10 +204,8 @@ public final class CSharpIndex {
             char c = glob.charAt(i);
             if (c == '*' && i + 1 < glob.length() && glob.charAt(i + 1) == '*') {
                 i++;
-                if (i + 1 < glob.length() && glob.charAt(i + 1) == '/') {
-                    regex.append("(?:.*/)?");
-                    i++;
-                } else regex.append(".*");
+                if (i + 1 < glob.length() && glob.charAt(i + 1) == '/') { regex.append("(?:.*/)?"); i++; }
+                else regex.append(".*");
             } else if (c == '*') regex.append("[^/]*");
             else if (c == '?') regex.append(".");
             else regex.append("\\.[]{}()+-^$|".indexOf(c) < 0 ? c : "\\" + c);

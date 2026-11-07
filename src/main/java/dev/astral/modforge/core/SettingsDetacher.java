@@ -1,0 +1,142 @@
+package dev.astral.modforge.core;
+
+import java.nio.file.Path;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * Remove host settings dependencies from exported features.
+ * 从独立 MOD 中剥离宿主设置：只将能够证明是 ConfigEntry<bool> 的读取固定为 true。
+ */
+public class SettingsDetacher {
+    public record Result(Map<Path, String> sources, List<String> warnings, List<String> errors) {}
+
+    private static final Pattern ENTRY = Pattern.compile(
+            "\\bConfigEntry\\s*<\\s*(bool|Boolean|int|float|double|string)\\s*>\\s+(\\w+)");
+    private static final Pattern CONFIG_VALUE = Pattern.compile(
+            "\\b((?:global::)?(?:[A-Za-z_]\\w*\\.)*(?:Plugin|[A-Za-z_]\\w*Configuration))\\s*\\.\\s*(\\w+)\\s*\\.\\s*Value\\b");
+    private static final Pattern CONFIG_OBJECT = Pattern.compile(
+            "\\b((?:global::)?(?:[A-Za-z_]\\w*\\.)*(?:Plugin|[A-Za-z_]\\w*Configuration))\\s*\\.\\s*(\\w+)\\b");
+    private static final Pattern USING = Pattern.compile("(?m)^[ \\t]*using\\s+(?:static\\s+)?([A-Za-z_][\\w.]*)\\s*;[ \\t]*(?:\\r?\\n)?");
+    private static final Set<String> PLUGIN_MEMBERS = Set.of("Instance", "ModLog", "SaveSettings");
+
+    /** Settings and configuration source files belong to the host, not the standalone DLL. */
+    public static boolean isHostManaged(CSharpIndex index, CSharpIndex.Unit unit) {
+        String path = index.root().relativize(unit.file()).toString().replace('\\', '/');
+        return path.equals("Plugin.cs") || path.equals("HotfixWatcher.cs") ||
+                path.endsWith("/ModLanguageService.cs") || path.endsWith("/ModLocalization.cs") ||
+                path.contains("/Settings/") || path.startsWith("Framework/Settings/") ||
+                path.contains("/Configuration/") || path.startsWith("Framework/Configuration/");
+    }
+
+    public static boolean isUiSettings(CSharpIndex index, CSharpIndex.Unit unit) {
+        String path = index.root().relativize(unit.file()).toString().replace('\\', '/');
+        return path.contains("/Settings/") || path.startsWith("Framework/Settings/");
+    }
+
+    public Result transform(CSharpIndex index, Collection<CSharpIndex.Unit> sources) {
+        Map<String, String> propertyTypes = new HashMap<>();
+        Set<String> hostNamespaces = new HashSet<>();
+        Set<String> managedTypeNames = new HashSet<>();
+        for (CSharpIndex.Unit unit : index.units().values()) {
+            if (!isHostManaged(index, unit)) continue;
+            if (!unit.namespace().isBlank() &&
+                    (isUiSettings(index, unit) || index.root().relativize(unit.file()).toString().replace('\\', '/').contains("/Configuration/")))
+                hostNamespaces.add(unit.namespace());
+            for (String type : unit.declared()) {
+                managedTypeNames.add(type);
+                Matcher matches = ENTRY.matcher(unit.code());
+                while (matches.find()) {
+                    String name = matches.group(2);
+                    propertyTypes.put(type + "." + name, matches.group(1));
+                }
+            }
+        }
+        Map<Path, String> output = new LinkedHashMap<>();
+        List<String> warnings = new ArrayList<>(), errors = new ArrayList<>();
+        Set<String> enabledNames = new TreeSet<>();
+        for (CSharpIndex.Unit unit : sources) {
+            String code = unit.source();
+            String masked = CSharpIndex.maskLiteralsAndComments(code);
+            Matcher m = CONFIG_VALUE.matcher(masked);
+            List<Replacement> replacements = new ArrayList<>();
+            Set<Integer> rewrittenMembers = new HashSet<>();
+            while (m.find()) {
+                String qualifier = m.group(1).replace("global::", "");
+                String owner = qualifier.substring(qualifier.lastIndexOf('.') + 1);
+                String name = m.group(2);
+                String type = propertyTypes.get(owner + "." + name);
+                if (type == null) {
+                    errors.add("无法确定设置类型，未改写 / Unknown setting: " + qualifier + "." + name +
+                            " (" + index.root().relativize(unit.file()) + ")");
+                    continue;
+                }
+                if (!"bool".equals(type) && !"Boolean".equals(type)) {
+                    errors.add("非布尔设置不能默认开启，请单独处理 / Non-boolean setting: " + qualifier + "." + name);
+                    continue;
+                }
+                if (isWrite(masked, m.start(), m.end())) {
+                    errors.add("设置值被写入或按引用传递，不能安全固定 / Setting write or ref: " + qualifier + "." + name);
+                    continue;
+                }
+                replacements.add(new Replacement(m.start(), m.end(), "true"));
+                rewrittenMembers.add(m.start(2));
+                enabledNames.add(qualifier + "." + name);
+            }
+            // No lingering ConfigEntry object may be copied, including passing a setting to a helper.
+            Matcher raw = CONFIG_OBJECT.matcher(masked);
+            while (raw.find()) {
+                String owner = raw.group(1).replace("global::", "");
+                owner = owner.substring(owner.lastIndexOf('.') + 1);
+                if (propertyTypes.containsKey(owner + "." + raw.group(2)) && !rewrittenMembers.contains(raw.start(2)))
+                    errors.add("存在未转换的设置对象引用 / Setting object reference: " + raw.group(0) +
+                            " (" + index.root().relativize(unit.file()) + ")");
+            }
+            String changed = apply(code, replacements);
+            // Drop using directives for discarded host namespaces; do not drop BepInEx.Configuration.
+            Matcher usings = USING.matcher(CSharpIndex.maskLiteralsAndComments(changed));
+            List<Replacement> unused = new ArrayList<>();
+            while (usings.find()) if (hostNamespaces.contains(usings.group(1)))
+                unused.add(new Replacement(usings.start(), usings.end(), ""));
+            changed = apply(changed, unused);
+            String remaining = CSharpIndex.maskLiteralsAndComments(changed);
+            for (String type : managedTypeNames) {
+                if (type.equals("Plugin") || type.equals("ModLocalization") || type.equals("ModLanguageService") ||
+                        type.equals("HotfixWatcher")) continue;
+                // Declarations/imports do not survive: any remaining host-managed class reference is unsafe.
+                if (Pattern.compile("\\b" + Pattern.quote(type) + "\\b").matcher(remaining).find()) {
+                    errors.add("依赖宿主设置或配置类，无法独立导出 / Host settings class: " + type +
+                            " (" + index.root().relativize(unit.file()) + ")");
+                }
+            }
+            // The original Plugin itself is replaced by the generated entrypoint.
+            Matcher plugin = Pattern.compile("\\bPlugin\\s*\\.\\s*(\\w+)").matcher(remaining);
+            while (plugin.find()) if (!PLUGIN_MEMBERS.contains(plugin.group(1)))
+                errors.add("依赖原 MOD 的 Plugin 成员 / Host Plugin member: " + plugin.group(1) +
+                        " (" + index.root().relativize(unit.file()) + ")");
+            output.put(unit.file(), changed);
+        }
+        if (!enabledNames.isEmpty())
+            warnings.add("已将 " + enabledNames.size() + " 个布尔开关固定为开启，不生成设置按钮或配置绑定 / " +
+                    "Boolean toggles are always enabled: " + enabledNames);
+        return new Result(Map.copyOf(output), List.copyOf(warnings), List.copyOf(new LinkedHashSet<>(errors)));
+    }
+
+    private static boolean isWrite(String masked, int start, int end) {
+        String before = masked.substring(Math.max(0, start - 15), start);
+        if (before.matches("(?s).*\\b(ref|out|in)\\s*$")) return true;
+        String after = masked.substring(end).stripLeading();
+        return after.startsWith("=") && !after.startsWith("==") && !after.startsWith("=>") ||
+                after.startsWith("++") || after.startsWith("--") || after.startsWith("+=") ||
+                after.startsWith("-=") || after.startsWith("??=");
+    }
+
+    private record Replacement(int start, int end, String value) {}
+    private static String apply(String original, List<Replacement> edits) {
+        StringBuilder result = new StringBuilder(original);
+        edits.sort(Comparator.comparingInt(Replacement::start).reversed());
+        for (Replacement edit : edits) result.replace(edit.start, edit.end, edit.value);
+        return result.toString();
+    }
+}
