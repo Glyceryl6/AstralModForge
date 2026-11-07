@@ -1,111 +1,91 @@
-# 星航 MOD 工坊 / Astral Mod Forge · v0.1.0
+# 星航 MOD 工坊 / Astral Mod Forge · v0.2.0
 
-> **独立的 Rider 开发工具，不属于 AstralProbe 的 MOD 版本。**
->
-> **Standalone development tool; does not change AstralProbe's version.**
+**独立的 Java / JetBrains Rider 开发工具，不属于 AstralProbe 的 MOD 版本。**
 
-面向《吉星派对》Unity IL2CPP / HybridCLR、BepInEx 与 SNWCreations 修复版 Il2CppInterop 的 Java Rider 插件原型。提供独立 MOD 创建、选中类导出、保守的源码依赖闭包、部分生命周期接线、内嵌双语资源或固定文本导出、编译检查，以及可选的游戏目录部署。
+星航 MOD 工坊用于从 Unity IL2CPP / HybridCLR、BepInEx MOD 工程中提取部分 C# 功能，生成独立 MOD 的入口、依赖工程与本地化，并尝试通过 `dotnet build` 生成 DLL。也能只输入 MOD ID 创建空 MOD 项目。
 
-**重要：本次交付包含安装候选包，但未在真实 Rider SDK / .NET 编译工具链 / 游戏环境验证。** 本项目的 Java 代码已通过离线单元检查；发布候选 JAR 使用临时 API 签名替身进行编译，没有把这些替身打入 JAR。正式使用前应在 Rider/IntelliJ 导入项目，用实际 Rider SDK 执行 `gradle buildPlugin` 后以新 ZIP 替换预构建候选包。
+> **交付状态：开发预览版。** Java 核心的 49 项离线回归检查已通过；Rider 前端已在模拟的 IntelliJ API 签名环境下完成语法编译。由于当前环境没有真实 Rider SDK、Gradle 依赖下载能力及 .NET 编译环境，附带的 Rider 安装 ZIP **不能视为已经通过 Rider 安装／运行验证的正式构建**。请按本文使用 `gradle buildPlugin` 生成正式插件 ZIP，并自行在游戏里验证独立 DLL。
 
-## 名称与定位
+## 本次 v0.2.0 变化
 
-- 中文：**星航 MOD 工坊**；English: **Astral Mod Forge**。
-- 插件 ID：`dev.astral.modforge`；版本：`v0.1.0`；Java 21。
-- Gradle：IntelliJ Platform Gradle Plugin **2.20.0**，Rider SDK **2025.2.3**（对应 since-build `252`，可在 `build.gradle` 中调整）。
-- 目标 MOD：`net6.0`，独立的 `BasePlugin.Load()`，包版本参考现有 AstralProbe 工程。
-- 所有功能通过 Rider 的 **Tools → 星航 MOD 工坊 / Astral Mod Forge** 菜单启动。
+- **设置开关默认开启**：可明确解析的 `ConfigEntry<bool>` 原宿主开关读取（如 `Plugin.AutoPraisePlayers.Value`）在导出的功能源码中变成 `true`；不会为它生成新的设置按钮，也不复制 `Framework.Settings`、`Framework.Configuration`、旧 `Plugin.cs` 等宿主文件。非布尔设置、动态对象引用、对开关写入等无法安全处理的情形会提示失败，而不是悄悄改变行为。
+- **可选是否导出 C# 源码**：默认关闭；使用系统临时目录编译，仅在输出目录保留成功的 DLL、构建日志、导出报告和清单，不会把生成类放在原工程下。勾选源码时，默认将独立工程输出到**原 C# 项目的同级目录**，并阻止自定义输出路径落在原工程内部，以防 SDK 风格项目自动扫描产生重复定义。
+- **文件浏览器式勾选树**：可展开、折叠目录；勾选功能时自动补齐可静态识别的调用依赖和 `partial` 类；取消一个依赖文件时会撤销依赖它的已选功能。支持从 Rider 文件视图带入预选项，无需 Shift 多选。
+- **界面真正区分中英文**：`Messages.properties` 与 `Messages_zh_CN.properties`，通过 JetBrains `DynamicBundle` 跟随 IDE 语言；不再把所有选项机械地显示成中英双语合并字符串。工具窗口有深浅色 SVG 图标（16px、20px）。
+- **构建过程可见**：工具窗口实时展示构建阶段与 `dotnet build` 输出；同时将日志写到 `build.log`，能取消后台导出。编译成功后才允许复制到游戏目录。
+- **Java 代码约定**：除 JetBrains `@Service` 轻量服务强制要求 `final` 外，不增加没有必要的 `final` 类和空构造方法。
 
-## 安装 / Installation
+## 环境与构建
 
-1. 推荐做法：在 Rider 或 IntelliJ IDEA 打开本 Java 工程，使用 **JDK 21 / Gradle 9.0+** 同步 Gradle 项目；执行 `gradle buildPlugin`。
-2. 官方的 Gradle 插件任务会在 `build/distributions/` 生成可安装 ZIP。Rider 的 **Settings → Plugins → 齿轮 → Install Plugin from Disk** 中选择该 ZIP，重启 IDE。
-3. 另附 `AstralModForge-v0.1.0-preview-install.zip` 可用于初步界面试装，但因缺少真实 Rider SDK 验证，**不保证所有 Rider 版本兼容**。建议以 Gradle 正式构建产物为准。
-
-本项目未内附 Gradle Wrapper JAR。可使用 Rider 中的 Gradle 集成或系统安装的 Gradle 9+，正常首次同步需要下载 JetBrains Rider SDK。插件在运行时调用本机的 `.NET SDK`：确保 Rider/系统 `dotnet --info` 可用，并能还原相应 NuGet 包。**没有 dotnet 时仍可创建/导出 C# 工程，但不会声称已编译 DLL。**
-
-## 功能 / Features
-
-**一、新建空 MOD / New MOD Project**
-
-只需输入例如 `dev.example.hello` 这样的 MOD ID。自动生成可打开的 `.csproj`、`Plugin.cs`、`ModLocalization.cs`、`Features/SampleFeature.cs`、中英文 JSON、README 和 Git 忽略文件，输出到：
-
-```text
-<当前工程>/AstralModForge/Projects/dev_example_hello/
-```
-
-`Plugin.Load()` 将初始化示例模块；BepInEx GUID 使用原始 ID。配置写入该 MOD 对应的 BepInEx cfg，本地化覆盖文件位于 `BepInEx/config/<MOD ID>/lang/`，避免与 AstralProbe 共用一套文件。
-
-**二、导出选中类 / Export Selected Classes**
-
-从当前工程的 `.cs` 文件列表中多选（会预选 Rider 项目视图当前选中的源码文件），输入 MOD ID，可填写多个初始化、每帧入口（用英文分号 `;` 分隔），然后选择本地化模式：
-
-- **内嵌 JSON（推荐）**：内嵌 `zh_cn` / `en_us` 默认资源；生成的 MOD 可以在独立配置文件选择语言，也可在游戏外修改 `lang/*.json`；受支持的 `astralprobe.*` 翻译键会转换成新 MOD ID 前缀。
-- **固定文本（可选）**：把明确形如 `ModLanguageService.Translate("literal.key")` 或 `ModLocalization.T("literal.key")` 的调用替换成指定语言的 C# 字符串字面量；动态键、未知键、直接传给 UI 的翻译键将停止导出，避免错误替换。
-
-依赖收集按选中文件的类型标识追踪同工程依赖，并自动包含同一个类的其他 `partial` 分部。只自动调用**所选类**中可明确识别的 `Init/Initialize/Install`、`Tick()` / `Tick(float)`，不会擅自运行依赖工具类的启动方法。可手动填写：
-
-```text
-初始化入口：Some.Namespace.ClassA::Initialize;Some.Namespace.ClassB::Install
-更新入口：Some.Namespace.ClassA::Tick;Some.Namespace.ClassB::Tick
-```
-
-输出结构：
-
-```text
-<当前工程>/AstralModForge/Exports/<MOD ID 安全目录名>-<日期时间>/
-├─ MOD.csproj
-├─ Plugin.cs
-├─ ModLocalization.cs
-├─ ModLanguageCompat.cs
-├─ Source/                 # 本次闭包 C# 文件，不回写原工程
-├─ lang/zh_cn.json
-├─ lang/en_us.json
-├─ export-manifest.properties
-├─ export-report.md
-├─ build.log                 # 如已运行 dotnet build
-└─ dist/                     # 仅在真正产生 DLL 后生成
-```
-
-**三、部署 / Copy to game**
-
-勾选后提供游戏根目录，仅当 `BepInEx/core`、`BepInEx/plugins` 和 Unity 游戏标记存在且编译成功，才复制到 `BepInEx/plugins/<MOD>/`。旧同名 DLL 会先备份；无效游戏路径或编译失败时不复制，只保留输出工程／成功构建的 `dist`。拒绝符号链接绕出游戏目录。
-
-## 兼容性范围和必须复查的部分
-
-这是开发效率工具，**不是完整 ReSharper/Roslyn 的调用图重写器**。Rider 的 C# 语义服务运行于 ReSharper 后端，纯 Java 前端不能准确获知所有间接引用和 Unity 生命周期。以下情况需要用户审查、或预先将类改造成可独立初始化的模块：
-
-- 多态、反射、字符串定位类型、Harmony Patch 特性、事件注册、动态调用、额外的 `Awake/OnDestroy/OnEnable`；不会自动复制或绑定所有这些调用链。
-- 原 `HotfixWatcher`/`Plugin` 的私有服务及 SDK 注册顺序。内建兼容层仅提供基础日志、`SaveSettings()`、部分 `ConfigEntry<T>`；其它宿主专属引用会阻止导出或导致编译诊断。生成的配置项初始值为保守值，**不等于原 MOD 的用户配置**。
-- 原 `.csproj` 中的项目引用会用源计算机上的绝对路径保留；跨设备迁移要改为 NuGet 包或随包构建 SDK。引用了共享 SDK 的输出可能包含额外 DLL，请检查多个 MOD 之间是否存在版本冲突。
-- 已有代码直接传给 SDK UI 的翻译键、硬编码 `AstralProbe` 配置路径等不能保证自动转换，预检报告会提示。
-- Unity、IL2CPP 和 FairyGUI 必须在游戏主线程访问；生成的 `Update` 组件在主线程调度，但不会自动补齐游戏状态检查、卸载逻辑或事件反注册。
-- **不要同时启用原版 AstralProbe 和复制了同一功能的独立 MOD**，以免重复订阅、重复 UI 或抢占热键。
-- 源工程保存后再导出；导出读取磁盘文件，不读取 Rider 未保存的编辑缓冲区。
-
-## 源码／测试
-
-```text
-src/main/java/dev/astral/modforge/core/   核心功能：无 JetBrains 依赖
-src/main/java/dev/astral/modforge/ide/    Rider 菜单与 Swing 面板
-src/main/java/dev/astral/modforge/cli/    共用核心的命令行入口
-src/main/resources/META-INF/plugin.xml  插件声明
-src/test/java/                         Java 离线回归检查
-examples/dev_example_hello/            生成的空 MOD 示例
-```
-
-源码可以直接在 Rider 里导入 Gradle。没有 IDE SDK 时可独立运行 `scripts/offline-core-checks.sh`，或直接用 `javac` 编译 `core/`、`cli/` 并执行 `CoreChecks`。本次验证包含 **29 项纯 Java 检查**、真实 AstralProbe `AutoPraiseService` 选择导出推演（11 个 C# 文件）。**未做 .NET 编译、游戏加载、JetBrains 插件验证器检查。**
-
-## CLI（运行插件 JAR）
+| 项目 | 要求 |
+|---|---|
+| IDE | JetBrains Rider 2025.2 系列；Gradle 项目目标 SDK 2025.2.3，其他版本须验证 |
+| Java | JDK 21 |
+| Gradle | **9.0.0 或更新**，IntelliJ Platform Gradle Plugin 2.20.0 |
+| MOD DLL | 支持 `net6.0` 的 .NET SDK、可用的 NuGet 依赖、兼容的 BepInEx IL2CPP 游戏环境 |
 
 ```bash
-java -jar AstralModForge.jar new --id=dev.example.mod --project=/path/to/workspace
-java -jar AstralModForge.jar export --id=dev.example.mod --project=/path/to/AstralProbe \
-  --classes=Features/Automation/AutoPraiseService.cs --no-build
-java -jar AstralModForge.jar export --id=dev.example.mod --project=/path/to/AstralProbe \
-  --classes=Features/SomeA.cs,Features/SomeB.cs \
-  '--load=MyNamespace.SomeA::Initialize;MyNamespace.SomeB::Install' \
-  --lang=embedded --copy --game=/path/to/game
+gradle coreChecks         # Java 核心 49 项回归检查
+gradle buildPlugin        # 用真正的 Rider SDK 生成 build/distributions/*.zip
+gradle runIde             # 在 IDE 沙盒中试运行；正式使用前务必验证
 ```
 
-更多细节见 `docs/使用手册-v0.1.0.md`、`docs/架构与限制-v0.1.0.md`。
+本仓库未提交 Gradle Wrapper JAR，可通过 Rider 的 Gradle 集成或系统安装的 Gradle 9+ 构建。首次构建需要下载 Rider SDK；如果无法访问网络，可执行 `scripts/offline-core-checks.sh`（Java 核心测试，不代表 Rider 兼容性验证）。
+
+官方资料：
+
+- [Rider 插件开发](https://plugins.jetbrains.com/docs/intellij/rider.html)
+- [IntelliJ Platform Gradle Plugin](https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html)
+- [工具窗口](https://plugins.jetbrains.com/docs/intellij/tool-windows.html)
+- [本地化](https://plugins.jetbrains.com/docs/intellij/internationalization.html)
+- [轻量服务的限制](https://plugins.jetbrains.com/docs/intellij/plugin-services.html)
+
+## Rider 中使用
+
+在 **Tools → Astral Mod Forge / 星航 MOD 工坊** 菜单中：
+
+1. **新建独立 MOD**：输入 `dev.example.hello` 这样的 MOD ID，工具输出 `.csproj`、`Plugin.cs`、功能示例、独立本地化 JSON。若当前目录是 C# 项目根目录，新项目会自动写到同级的 `AstralModForge-Projects`，避免被原工程编译。
+2. **导出选中类**：输入新 MOD ID，在可展开的文件树中勾选功能类；所需依赖自动勾选。检查初始化／每帧入口，点击“检查依赖”。可选择内嵌 JSON 或固定语言文本。
+3. **编译／源码／部署**：默认“编译 DLL”开启、“导出 C# 源码”关闭；也可以开启源码，保存可继续开发的工程。可勾选成功后复制到游戏目录（需要有效游戏根目录）。
+4. **查看日志**：展开下方 Astral Mod Forge 工具窗口查看实时阶段、构建输出；交付文件中仍保留 `build.log` 与 `export-report.md`。
+
+**只导出 DLL（默认）**：输出 `./AstralModForge/Exports/<ID>-<时间>/dist/*.dll`、`build.log`、`export-report.md`、`export-manifest.properties`；临时 C# 工程随后删除。**导出源码**：默认使用 `<原项目>-ForgeExports/Exports/...` 保存完整工程、语言文件和可能生成的 `dist`。
+
+`Framework.Settings` 相关配置被剥离并不意味着可安全丢弃任何设置逻辑：只自动处理明确的布尔开关**读取**。对于非布尔配置或写入引用，需拆分业务逻辑后重试。**不自动重新生成 MOD 设置页面。**
+
+## CLI（独立 JAR）
+
+```bash
+java -jar AstralModForge-v0.2.0-standalone-cli.jar new \
+  --id=dev.example.hello --project=/path/to/workspace
+
+# 默认只尝试编译 DLL，不导出 C# 文件
+java -jar AstralModForge-v0.2.0-standalone-cli.jar export \
+  --id=dev.example.autopraise --project=/path/to/AstralProbe \
+  --classes=Features/Automation/AutoPraiseService.cs
+
+# 需要分析或二次开发时，可只输出源码（不会调用 dotnet）
+java -jar AstralModForge-v0.2.0-standalone-cli.jar export \
+  --id=dev.example.autopraise --project=/path/to/AstralProbe \
+  --classes=Features/Automation/AutoPraiseService.cs --export-source --no-build
+```
+
+可选参数：`--lang=embedded|inline`、`--locale=zh_cn|en_us`、`--load=Namespace.Type::Initialize`、`--update=Namespace.Type::Tick`、`--output=/safe/path`、`--copy --game=/game/root`。不构建时必须指定 `--export-source`；需要保存源码时禁止输出到现有 C# 项目内部。
+
+## 项目结构
+
+```text
+src/main/java/dev/astral/modforge/core/   导出与依赖、设置拆分、勾选关系模型（不依赖 Rider）
+src/main/java/dev/astral/modforge/ide/    Rider 动作、Swing 勾选树、工具窗口、语言资源
+src/main/java/dev/astral/modforge/cli/    独立命令行
+src/main/resources/icons/              工具窗口 SVG 图标
+src/main/resources/dev/astral/modforge/i18n/  中英文 Properties
+src/test/java/                         49 项核心检查
+examples/dev_example_hello/            新建 MOD 示例
+docs/                                 使用手册、边界说明、中文 Git 提交清单
+.github/workflows/ci.yml               GitHub Actions 验证并构建插件 ZIP
+```
+
+**不做的事**：本工具无法仅靠 Java 获得 Rider ReSharper 的完整 C# 语义调用图；无法自动重建所有 Harmony 注册、Unity 事件订阅、反射和动态热更新生命周期。编译通过也不意味着游戏一定能加载。请查看 [使用手册](docs/使用手册-v0.2.0.md) 和 [架构与限制](docs/架构与限制-v0.2.0.md)。
+
+**发布到 GitHub**：完整源码工程直接作为仓库；另提供相对于 v0.1.0 的分类 `git format-patch`，按编号使用 `git am`。提交说明见 [Git 提交说明](docs/Git提交说明-v0.2.0.md)。

@@ -88,6 +88,141 @@ public final class CoreChecks {
                     ForgeSpec.LanguageMode.EMBEDDED,"zh_cn","","",false,false,null));
                 throw new AssertionError("unsupported Plugin API should fail");
             } catch(IOException ok) {check(ok.getMessage().contains("Plugin"),"host-only APIs blocked");}
+            // v0.2.0: feature toggles are constant true; UI/config classes never enter the export.
+            Files.writeString(src.resolve("Plugin.cs"), """
+                    using BepInEx.Configuration;
+                    namespace Sample { public class Plugin {
+                      internal static ConfigEntry<bool> AutoPraisePlayers => throw new System.Exception();
+                    } }
+                    """);
+            Files.createDirectories(src.resolve("Features/Configuration"));
+            Files.createDirectories(src.resolve("Features/Settings"));
+            Files.writeString(src.resolve("Features/Configuration/AutoConfiguration.cs"), """
+                    namespace Sample.Features.Configuration {
+                      class AutoConfiguration {
+                        internal static ConfigEntry<bool> Enabled;
+                      }
+                    }
+                    """);
+            Files.writeString(src.resolve("Features/Settings/AutoSettingsGroup.cs"),
+                    "namespace Sample.Features.Settings { class AutoSettingsGroup {} }");
+            Files.writeString(src.resolve("Features/AutoSwitch.cs"), """
+                    using Sample.Features.Configuration;
+                    namespace Sample.Features {
+                      internal class AutoSwitch {
+                        internal void Tick(float now) {
+                          if (!Plugin.AutoPraisePlayers.Value) return;
+                          if (!AutoConfiguration.Enabled.Value) return;
+                        }
+                      }
+                    }
+                    """);
+            CSharpIndex settingsIndex = new CSharpIndex(src);
+            ClassSelectionModel switchTree = new ClassSelectionModel(settingsIndex);
+            check(!switchTree.eligible().contains(src.resolve("Features/Settings/AutoSettingsGroup.cs")),
+                    "host UI settings not selectable");
+            check(!switchTree.eligible().contains(src.resolve("Features/Configuration/AutoConfiguration.cs")),
+                    "host config not selectable");
+            ForgeSpec auto = new ForgeSpec(src,"dev.test.auto",List.of(Path.of("Features/AutoSwitch.cs")),
+                    base.resolve("out"),ForgeSpec.LanguageMode.EMBEDDED,"zh_cn","","",false,false,null,true);
+            DependencyPlanner.Plan autoPlan = new DependencyPlanner(settingsIndex).plan(auto);
+            check(autoPlan.ready(), "original Plugin getter config recognized: " + autoPlan.errors());
+            check(autoPlan.sources().size() == 1, "settings and config not copied");
+            String detached = autoPlan.rewrittenSources().get(src.resolve("Features/AutoSwitch.cs"));
+            check(detached.contains("if (!true) return") && !detached.contains("AutoConfiguration"),
+                    "both bool settings changed to true; discarded configuration using");
+            ForgeExporter.Result autoExport = new ForgeExporter().export(auto);
+            check(Files.readString(autoExport.directory().resolve("Source/Features/AutoSwitch.cs"))
+                    .contains("!true"), "exported source switch always enabled");
+            check(!Files.exists(autoExport.directory().resolve("Source/Features/Configuration")),
+                    "no config source in exported project");
+            check(!Files.readString(autoExport.directory().resolve("Plugin.cs")).contains("Config.Bind(\"ExportedFeature\""),
+                    "no BepInEx toggle registration generated");
+
+            Files.writeString(src.resolve("Features/WriteSwitch.cs"), """
+                    namespace Sample.Features {
+                      class WriteSwitch { internal static void Initialize() { Plugin.AutoPraisePlayers.Value = false; } }
+                    }
+                    """);
+            ForgeSpec writeToggle = new ForgeSpec(src,"dev.test.write",List.of(Path.of("Features/WriteSwitch.cs")),
+                    base.resolve("out"),ForgeSpec.LanguageMode.EMBEDDED,"zh_cn","","",false,false,null,true);
+            check(!new DependencyPlanner(new CSharpIndex(src)).plan(writeToggle).ready(),
+                    "writing host toggle must fail instead of silently rewriting");
+
+            Files.writeString(src.resolve("Features/Helper.cs"),
+                    "namespace Sample.Features { class Helper {} }");
+            Files.writeString(src.resolve("Features/UsesHelper.cs"),
+                    "namespace Sample.Features { class UsesHelper { Helper value; internal void Initialize() {} } }");
+            Files.writeString(src.resolve("Features/UsesHelperAgain.cs"),
+                    "namespace Sample.Features { class UsesHelperAgain { Helper value; internal void Initialize() {} } }");
+            Files.writeString(src.resolve("Features/Standalone.cs"),
+                    "namespace Sample.Features { class Standalone { internal void Initialize() {} } }");
+            Files.writeString(src.resolve("Features/OuterType.cs"), """
+                    namespace Sample.Features {
+                      class OuterType { private struct PrivateColor {} }
+                    }
+                    """);
+            Files.writeString(src.resolve("Features/OtherOuterType.cs"), """
+                    namespace Sample.Features {
+                      class OtherOuterType { private struct PrivateColor {} }
+                    }
+                    """);
+            CSharpIndex nestedIndex = new CSharpIndex(src);
+            check(!nestedIndex.unit(src.resolve("Features/OuterType.cs")).declared().contains("PrivateColor"),
+                    "nested private C# types are not top-level candidates");
+            ClassSelectionModel graph = new ClassSelectionModel(new CSharpIndex(src));
+            Path helper = src.resolve("Features/Helper.cs");
+            Path first = src.resolve("Features/UsesHelper.cs");
+            Path second = src.resolve("Features/UsesHelperAgain.cs");
+            Path standalone = src.resolve("Features/Standalone.cs");
+            graph.checkAll(List.of(first, second, standalone));
+            check(graph.checked().contains(helper), "checking features auto-checks dependency");
+            check(graph.requested().size() == 3 && graph.checked().size() == 4,
+                    "implicit dependencies are not manually selected entrypoints");
+            graph.uncheck(helper);
+            check(graph.checked().equals(Set.of(standalone)),
+                    "unchecking dependency removes every dependent, retains unrelated feature");
+            graph.check(first);
+            check(graph.checked().contains(helper) && graph.checked().contains(first),
+                    "rechecking feature restores required dependency");
+
+            boolean protectedOutput = false;
+            try { new ForgeSpec(src,"dev.test.badpath",List.of(Path.of("Features/AutoSwitch.cs")),
+                    src.resolve("local-output"),ForgeSpec.LanguageMode.EMBEDDED,"zh_cn","","",true,false,null,true); }
+            catch (IllegalArgumentException ok) { protectedOutput = true; }
+            check(protectedOutput,"source export blocked under active .csproj root");
+            ForgeSpec noSource = new ForgeSpec(src,"dev.test.auto",List.of(Path.of("Features/AutoSwitch.cs")),
+                    null,ForgeSpec.LanguageMode.EMBEDDED,"zh_cn","","",true,false,null,false);
+            check(noSource.destination().startsWith(src) && !noSource.exportSource(),
+                    "DLL-only export uses controlled in-project artifacts folder");
+            if (!System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")) {
+                Path fakeSdk = base.resolve("fake-dotnet.sh");
+                Files.writeString(fakeSdk, """
+                        #!/bin/sh
+                        if [ "$1" = "--version" ]; then echo 8.0.0; exit 0; fi
+                        mkdir -p bin/Release/net6.0
+                        printf fake > bin/Release/net6.0/dev_test_auto.dll
+                        echo MockBuild succeeded
+                        """);
+                fakeSdk.toFile().setExecutable(true);
+                System.setProperty("astral.modforge.dotnet", fakeSdk.toString());
+                try {
+                    List<String> events = new ArrayList<>();
+                    ForgeExporter.Result built = new ForgeExporter().export(noSource,
+                            (kind, message) -> events.add(kind + ":" + message));
+                    check(built.compiled() && Files.isRegularFile(built.dll()),
+                            "mock DLL-only build preserves dist DLL");
+                    try(Stream<Path> paths = Files.walk(built.directory())) {
+                        check(paths.noneMatch(p -> p.toString().endsWith(".cs") || p.toString().endsWith(".csproj")),
+                                "no generated C# source survives DLL-only build");
+                    }
+                    check(events.stream().anyMatch(x -> x.contains("MockBuild succeeded")),
+                            "live build output observer receives compiler lines");
+                    check(Files.readString(built.directory().resolve("build.log")).contains("MockBuild succeeded"),
+                            "complete build log retained alongside dist and report");
+                } finally { System.clearProperty("astral.modforge.dotnet"); }
+            }
+
             ForgeExporter.Result fresh=new ForgeExporter().createEmpty(base,"dev.test.blank");
             check(Files.isRegularFile(fresh.directory().resolve("dev_test_blank.csproj")),"new standalone project .csproj");
             check(Files.readString(fresh.directory().resolve("Features/SampleFeature.cs")).contains("Initialize()"),"new project activation");
