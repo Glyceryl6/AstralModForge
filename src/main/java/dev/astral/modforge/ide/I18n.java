@@ -1,17 +1,10 @@
 package dev.astral.modforge.ide;
 
-import java.util.Locale;
-import java.util.ResourceBundle;
+import com.intellij.DynamicBundle;
 
-/**
- * IDE locale-bound UI / 跟随 Rider 的系统语言；具体 MOD 的语言选择互不干扰。
- */
-final class I18n {
-
-    private static final ResourceBundle M = ResourceBundle.getBundle("dev.astral.modforge.i18n.Messages", Locale.getDefault());
-
-    static String get(String key) {
-        return M.getString(key);
-    }
-
+/** JetBrains IDE locale, not the operating-system locale. / 跟随 Rider 显示语言。 */
+class I18n {
+    private static final DynamicBundle BUNDLE = new DynamicBundle(
+            I18n.class, "dev.astral.modforge.i18n.Messages");
+    static String get(String key, Object... args) { return BUNDLE.getMessage(key, args); }
 }

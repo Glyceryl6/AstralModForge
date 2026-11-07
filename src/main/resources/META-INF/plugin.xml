@@ -1,21 +1,24 @@
 <idea-plugin>
     <id>dev.astral.modforge</id>
-    <name>星航 MOD 工坊 / Astral Mod Forge</name>
-    <version>0.1.0</version>
+    <name>Astral Mod Forge</name>
+    <version>0.2.0</version>
     <idea-version since-build="252"/>
     <vendor>Astral Mod Forge Community</vendor>
     <description><![CDATA[
-        <p>为 BepInEx IL2CPP / HybridCLR MOD 创建独立项目，并从选中的 C# 源码生成可编译的独立导出工程。</p>
-        <p>Create standalone BepInEx IL2CPP MOD projects and export selected C# sources with dependency checks.</p>
+        <p>Create standalone BepInEx IL2CPP MODs from checked C# classes with dependency verification,
+        source-free DLL exports, per-MOD localization, and live compiler output.</p>
     ]]></description>
     <depends>com.intellij.modules.rider</depends>
-    <actions>
-        <group id="dev.astral.modforge.Tools" text="星航 MOD 工坊 / Astral Mod Forge" popup="true">
+    <resource-bundle>dev.astral.modforge.i18n.Messages</resource-bundle>
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Astral Mod Forge" anchor="bottom" icon="/icons/toolWindowIcon.svg"
+                    factoryClass="dev.astral.modforge.ide.ForgeToolWindowFactory"/>
+    </extensions>
+    <actions resource-bundle="dev.astral.modforge.i18n.Messages">
+        <group id="dev.astral.modforge.Tools" popup="true">
             <add-to-group group-id="ToolsMenu" anchor="last" />
-            <action id="dev.astral.modforge.New" class="dev.astral.modforge.ide.NewModAction"
-                    text="新建空 MOD / New MOD Project" />
-            <action id="dev.astral.modforge.Export" class="dev.astral.modforge.ide.ExportModAction"
-                    text="导出选中类 / Export Selected Classes" />
+            <action id="dev.astral.modforge.New" class="dev.astral.modforge.ide.NewModAction" />
+            <action id="dev.astral.modforge.Export" class="dev.astral.modforge.ide.ExportModAction" />
         </group>
     </actions>
 </idea-plugin>
