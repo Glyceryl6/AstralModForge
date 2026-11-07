@@ -47,7 +47,7 @@ public class ForgeExporter {
         Path target = unusedDirectory(projects, spec.safeName());
         Files.createDirectories(target);
         Path stage = spec.exportSource() ? target : Files.createTempDirectory("astral-mod-forge-build-");
-        StringBuilder report = new StringBuilder("# Astral Mod Forge v0.2.0 导出报告 / Export report\n\n" +
+        StringBuilder report = new StringBuilder("# Astral Mod Forge v0.3.0 导出报告 / Export report\n\n" +
                 "MOD ID: `" + spec.modId() + "`\n" +
                 "源工程 / Source: `" + spec.sourceRoot() + "`\n" +
                 "输出目录 / Output: `" + target + "`\n" +
@@ -90,12 +90,12 @@ public class ForgeExporter {
                 write(stage, "Source/" + relative.toString().replace('\\', '/'), locale.sources().get(unit.file()));
             }
             if (spec.exportSource()) {
-                write(stage, ".astral-mod-forge", "Astral Mod Forge 0.2.0\n" + spec.modId() + "\n");
+                write(stage, ".astral-mod-forge", "Astral Mod Forge 0.3.0\n" + spec.modId() + "\n");
                 write(stage, "README.md", "# " + spec.modId() + "\n\n" +
                         "独立导出工程。先检查 export-report.md，然后运行 `dotnet build -c Release`。\n\n" +
                         "Standalone export. Check export-report.md before building.\n");
             }
-            StringBuilder manifest = new StringBuilder("# Astral Mod Forge v0.2.0 / 导出清单\n" +
+            StringBuilder manifest = new StringBuilder("# Astral Mod Forge v0.3.0 / 导出清单\n" +
                     "id=" + spec.modId() + "\n" + "language=" + spec.languageMode() + "\n" +
                     "locale=" + spec.locale() + "\n" + "source=" + spec.exportSource() + "\n" +
                     "embeddedDefaults=" + spec.embedDefaultConfig() + "\n" +
@@ -219,7 +219,7 @@ public class ForgeExporter {
         write(destination, "lang/zh_cn.json", JsonFlat.write(Map.of(id+".sample.loaded", "示例功能已初始化")));
         write(destination, "lang/en_us.json", JsonFlat.write(Map.of(id+".sample.loaded", "Sample feature initialized")));
         write(destination, ".gitignore", "bin/\nobj/\n.idea/\n*.user\n");
-        write(destination, ".astral-mod-forge", "Astral Mod Forge 0.2.0\n"+id+"\n");
+        write(destination, ".astral-mod-forge", "Astral Mod Forge 0.3.0\n"+id+"\n");
         write(destination, "README.md", "# " + id + "\n\n" +
             "生成的 BepInEx Unity IL2CPP 独立 MOD 项目。使用 Rider 打开 `"+spec.safeName()+".csproj`，执行 `dotnet build -c Release`。\n" +
             "\nGenerated standalone BepInEx IL2CPP project. Build with .NET 6 SDK.\n" +

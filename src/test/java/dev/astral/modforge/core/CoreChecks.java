@@ -371,6 +371,44 @@ public final class CoreChecks {
             try(Stream<Path> content=Files.list(game.resolve("BepInEx/plugins/dev_test_alpha"))) {
                 check(content.anyMatch(p->p.getFileName().toString().contains("backup-")),"old DLL backup");
             }
+            // Explicit project service registration prevents Project.getService() from returning null.
+            // plugin.xml 注册与前端空值保护必须同时存在。
+            String descriptor = Files.readString(Path.of("src/main/resources/META-INF/plugin.xml"));
+            check(descriptor.contains("<projectService serviceImplementation=\"dev.astral.modforge.ide.BuildLogService\""),
+                    "BuildLogService registered as a project service");
+            String toolWindowFactory = Files.readString(Path.of("src/main/java/dev/astral/modforge/ide/ForgeToolWindowFactory.java"));
+            check(toolWindowFactory.contains("BuildLogService.getInstance(project)") &&
+                    Files.readString(Path.of("src/main/java/dev/astral/modforge/ide/ExportModAction.java"))
+                            .contains("BuildLogService.getInstance(project)"),
+                    "tool window and export action use nullable-safe log service lookup");
+            if (!System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")) {
+                Path fakeSdk = base.resolve("fake-dotnet-embedded.sh");
+                Files.writeString(fakeSdk, """
+                        #!/bin/sh
+                        if [ "$1" = "--version" ]; then echo 8.0.0; exit 0; fi
+                        grep -q 'ModLocalization.Initialize(Log)' Plugin.cs || exit 21
+                        grep -q 'GetManifestResourceStream' ModLocalization.cs || exit 22
+                        if grep -q 'Config.Bind' Plugin.cs; then exit 23; fi
+                        if grep -q 'File.WriteAllText' ModLocalization.cs; then exit 24; fi
+                        mkdir -p bin/Release/net6.0
+                        printf fake > bin/Release/net6.0/dev_test_embedded_install.dll
+                        echo EmbeddedConfigMock succeeded
+                        """);
+                fakeSdk.toFile().setExecutable(true);
+                ForgeSpec embeddedDeploy = new ForgeSpec(src,"dev.test.embedded-install",
+                        List.of(Path.of("Features/AutoSwitch.cs")),base.resolve("out"),
+                        ForgeSpec.LanguageMode.EMBEDDED,"en_us","","",true,true,game,false,true);
+                System.setProperty("astral.modforge.dotnet", fakeSdk.toString());
+                try {
+                    ForgeExporter.Result deployedEmbedded = new ForgeExporter().export(embeddedDeploy);
+                    check(deployedEmbedded.compiled() && deployedEmbedded.deployed(),
+                            "embedded-default DLL deployed after successful mock build");
+                    check(Files.isRegularFile(game.resolve("BepInEx/plugins/dev_test_embedded_install/dev_test_embedded_install.dll")) &&
+                            !Files.exists(game.resolve("BepInEx/config/dev.test.embedded-install.cfg")) &&
+                            !Files.exists(game.resolve("BepInEx/config/dev.test.embedded-install/lang")),
+                            "deploy copies DLL without generating sidecar default config or language files");
+                } finally { System.clearProperty("astral.modforge.dotnet"); }
+            }
             System.out.println("CoreChecks PASS: " + passed + " checks / 检查全部通过");
         } finally { try(Stream<Path> paths=Files.walk(base)){for(Path p:paths.sorted(Comparator.reverseOrder()).toList())Files.deleteIfExists(p);} }
     }
