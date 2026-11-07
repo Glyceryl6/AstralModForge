@@ -1,14 +1,30 @@
 package dev.astral.modforge.ide;
 
-import com.intellij.openapi.components.Service;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.util.Key;
 import javax.swing.*;
 
 /**
- * Project-scoped build console. JetBrains requires light services to be final.
- * 构建日志按项目隔离；这里的 final 是 IntelliJ 轻量服务 API 的强制要求。
+ * Project-scoped build console registered in plugin.xml.
+ * 构建日志在 plugin.xml 中显式注册；旧安装环境缺少服务时使用项目内备用实例。
  */
-@Service(Service.Level.PROJECT)
-public final class BuildLogService {
+public class BuildLogService {
+    private static final Key<BuildLogService> FALLBACK = Key.create("astral.modforge.buildLog.fallback");
+
+    public static BuildLogService getInstance(Project project) {
+        BuildLogService service = project.getService(BuildLogService.class);
+        if (service != null) return service;
+        // Avoid crashing the tool window when an older IDE fails to create the service.
+        // 旧版环境缺失项目服务时不阻止打开工具窗口；备用实例只属于当前项目。
+        synchronized (project) {
+            BuildLogService fallback = project.getUserData(FALLBACK);
+            if (fallback == null) {
+                fallback = new BuildLogService();
+                project.putUserData(FALLBACK, fallback);
+            }
+            return fallback;
+        }
+    }
     private final StringBuilder history = new StringBuilder();
     private JTextArea console;
     private JLabel phaseLabel;

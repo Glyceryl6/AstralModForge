@@ -27,7 +27,7 @@ public class ExportModAction extends AnAction {
         ForgeSpec spec;
         try { spec=dialog.toSpec(); }
         catch(Exception ex) { Messages.showErrorDialog(project,ex.getMessage(),I18n.get("export.title")); return; }
-        BuildLogService console = project.getService(BuildLogService.class);
+        BuildLogService console = BuildLogService.getInstance(project);
         console.clear();
         ToolWindow toolWindow = ToolWindowManager.getInstance(project).getToolWindow("Astral Mod Forge");
         if (toolWindow != null) toolWindow.show();

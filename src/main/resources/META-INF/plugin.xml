@@ -11,6 +11,7 @@
     <depends>com.intellij.modules.rider</depends>
     <resource-bundle>dev.astral.modforge.i18n.Messages</resource-bundle>
     <extensions defaultExtensionNs="com.intellij">
+        <projectService serviceImplementation="dev.astral.modforge.ide.BuildLogService"/>
         <toolWindow id="Astral Mod Forge" anchor="bottom" icon="/icons/toolWindowIcon.svg"
                     factoryClass="dev.astral.modforge.ide.ForgeToolWindowFactory"/>
     </extensions>

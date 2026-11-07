@@ -20,13 +20,13 @@ public class ForgeToolWindowFactory implements ToolWindowFactory {
         panel.add(status, BorderLayout.NORTH);
         panel.add(new JScrollPane(output), BorderLayout.CENTER);
         JButton clear = new JButton(I18n.get("console.clear"));
-        clear.addActionListener(e -> project.getService(BuildLogService.class).clear());
+        clear.addActionListener(e -> BuildLogService.getInstance(project).clear());
         JButton copy = new JButton(I18n.get("console.copy"));
         copy.addActionListener(e -> { output.selectAll(); output.copy(); output.select(0,0); });
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         buttons.add(copy); buttons.add(clear);
         panel.add(buttons, BorderLayout.SOUTH);
-        project.getService(BuildLogService.class).attach(output, status);
+        BuildLogService.getInstance(project).attach(output, status);
         Content content = ContentFactory.getInstance().createContent(panel, "", false);
         toolWindow.getContentManager().addContent(content);
     }
