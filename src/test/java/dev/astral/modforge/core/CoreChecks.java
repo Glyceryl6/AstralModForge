@@ -186,6 +186,67 @@ public final class CoreChecks {
             check(graph.checked().contains(helper) && graph.checked().contains(first),
                     "rechecking feature restores required dependency");
 
+            // Framework helpers automatically checked by the tree should be pruned if unused.
+            // UI 中因 using 引入的框架类不应在导出的独立 MOD 中产生无用源码。
+            Files.createDirectories(src.resolve("Framework/Helpers"));
+            Files.writeString(src.resolve("Framework/Helpers/UnusedHelper.cs"),
+                    "namespace Sample.Framework.Helpers { internal class UnusedHelper {} }");
+            Files.writeString(src.resolve("Features/UnusedFrameworkImport.cs"), """
+                    using Sample.Framework.Helpers;
+                    namespace Sample.Features { class UnusedFrameworkImport {
+                      internal static void Initialize() { System.Console.WriteLine("ready"); }
+                    } }
+                    """);
+            Files.writeString(src.resolve("Framework/Helpers/NeededHelper.cs"),
+                    "namespace Sample.Framework.Helpers { internal class NeededHelper { internal static void Run() {} } }");
+            Files.writeString(src.resolve("Features/NeedsFramework.cs"), """
+                    using Sample.Framework.Helpers;
+                    namespace Sample.Features { class NeedsFramework {
+                      internal static void Initialize() { NeededHelper.Run(); }
+                    } }
+                    """);
+            CSharpIndex frameworkIndex = new CSharpIndex(src);
+            ClassSelectionModel frameworkTree = new ClassSelectionModel(frameworkIndex);
+            frameworkTree.checkAll(List.of(Path.of("Features/UnusedFrameworkImport.cs"),
+                    Path.of("Framework/Helpers/UnusedHelper.cs")));
+            check(frameworkTree.checked().contains(src.resolve("Framework/Helpers/UnusedHelper.cs")),
+                    "checkbox tree can contain additional Framework helpers");
+            ForgeSpec prunedFramework = new ForgeSpec(src, "dev.test.framework-prune",
+                    List.of(Path.of("Features/UnusedFrameworkImport.cs"), Path.of("Framework/Helpers/UnusedHelper.cs")),
+                    base.resolve("out"), ForgeSpec.LanguageMode.EMBEDDED, "zh_cn", "", "", false, false, null);
+            DependencyPlanner.Plan prunedPlan = new DependencyPlanner(frameworkIndex).plan(prunedFramework);
+            check(prunedPlan.ready() && prunedPlan.sources().stream().noneMatch(
+                    u -> u.file().toString().contains("Framework/Helpers")),
+                    "unused and explicitly checked Framework files removed from export");
+            check(prunedPlan.warnings().stream().anyMatch(w -> w.contains("Pruned unused Framework")),
+                    "preflight reports pruned Framework files");
+            ForgeSpec requiredFramework = new ForgeSpec(src, "dev.test.framework-needed",
+                    List.of(Path.of("Features/NeedsFramework.cs")),base.resolve("out"),
+                    ForgeSpec.LanguageMode.EMBEDDED, "zh_cn", "", "", false, false, null);
+            DependencyPlanner.Plan requiredPlan = new DependencyPlanner(frameworkIndex).plan(requiredFramework);
+            check(requiredPlan.ready() && requiredPlan.sources().stream().anyMatch(
+                    u -> u.file().equals(src.resolve("Framework/Helpers/NeededHelper.cs"))),
+                    "Framework helper referenced by executable code is retained");
+
+            Files.writeString(src.resolve("Framework/Helpers/StaticNeeded.cs"), """
+                    namespace Sample.Framework.Helpers {
+                      internal static class StaticNeeded { internal static void Run() {} }
+                    }
+                    """);
+            Files.writeString(src.resolve("Features/UsesStaticFramework.cs"), """
+                    using static Sample.Framework.Helpers.StaticNeeded;
+                    namespace Sample.Features { class UsesStaticFramework {
+                      internal static void Initialize() { Run(); }
+                    } }
+                    """);
+            ForgeSpec staticFramework = new ForgeSpec(src,"dev.test.framework-static",
+                    List.of(Path.of("Features/UsesStaticFramework.cs")),base.resolve("out"),
+                    ForgeSpec.LanguageMode.EMBEDDED,"zh_cn","","",false,false,null);
+            DependencyPlanner.Plan staticPlan = new DependencyPlanner(new CSharpIndex(src)).plan(staticFramework);
+            check(staticPlan.ready() && staticPlan.sources().stream().anyMatch(
+                    u -> u.file().equals(src.resolve("Framework/Helpers/StaticNeeded.cs"))),
+                    "using static Framework helper is retained even without a qualified invocation");
+
             boolean protectedOutput = false;
             try { new ForgeSpec(src,"dev.test.badpath",List.of(Path.of("Features/AutoSwitch.cs")),
                     src.resolve("local-output"),ForgeSpec.LanguageMode.EMBEDDED,"zh_cn","","",true,false,null,true); }

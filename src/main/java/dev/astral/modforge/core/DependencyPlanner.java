@@ -66,12 +66,32 @@ public class DependencyPlanner {
             }
         }
 
+        FrameworkPruner pruner = new FrameworkPruner();
+        // First pass prevents a discarded Framework helper from introducing unrelated settings errors.
+        FrameworkPruner.Result pruned = pruner.prune(index, all, Map.of());
+        all = new LinkedHashSet<>(pruned.sources());
         SettingsDetacher.Result settings = new SettingsDetacher().transform(index, all);
+        // A boolean switch or a removed settings import may make further framework files unnecessary.
+        FrameworkPruner.Result refined = pruner.prune(index, all, settings.sources());
+        if (refined.sources().size() != all.size()) {
+            all = new LinkedHashSet<>(refined.sources());
+            settings = new SettingsDetacher().transform(index, all);
+        }
+        Set<Path> removedPaths = new LinkedHashSet<>(pruned.removed());
+        removedPaths.addAll(refined.removed());
+        if (!removedPaths.isEmpty())
+            warnings.add("已跳过 " + removedPaths.size() + " 个无须打包的 Framework 文件 / Pruned unused Framework helpers: " + removedPaths);
+        if (!refined.retained().isEmpty())
+            warnings.add("这些 Framework 类仍被功能引用，已保留 / Required Framework helpers retained: " + refined.retained());
+        if (initial.stream().noneMatch(all::contains))
+            errors.add("勾选的文件均不属于可独立运行的功能 / No executable feature after Framework pruning");
         warnings.addAll(settings.warnings());
         errors.addAll(settings.errors());
+        Set<CSharpIndex.Unit> selectedAfterPruning = new LinkedHashSet<>(initial);
+        selectedAfterPruning.retainAll(all);
 
-        List<Entry> loads = chooseEntries(spec.loadEntry(), all, initial, Set.of("Initialize", "Install", "Init"), "Load", errors, warnings);
-        List<Entry> updates = chooseEntries(spec.updateEntry(), all, initial, Set.of("Tick"), "Update", errors, warnings);
+        List<Entry> loads = chooseEntries(spec.loadEntry(), all, selectedAfterPruning, Set.of("Initialize", "Install", "Init"), "Load", errors, warnings);
+        List<Entry> updates = chooseEntries(spec.updateEntry(), all, selectedAfterPruning, Set.of("Tick"), "Update", errors, warnings);
         if (loads.isEmpty() && updates.isEmpty() && !initial.isEmpty())
             errors.add("未找到可安全调用的初始化或更新入口；请填写 Namespace.Type::Method / Lifecycle entry required");
         for (CSharpIndex.Unit u : all) {
