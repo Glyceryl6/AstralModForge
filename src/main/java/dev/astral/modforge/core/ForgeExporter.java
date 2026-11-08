@@ -182,9 +182,9 @@ public class ForgeExporter {
 
                 Files.createDirectories(outputDll.getParent());
                 Files.copy(dll, outputDll, StandardCopyOption.REPLACE_EXISTING);
-                // Ship both managed and native SDK libraries when referenced. The installer
-                // already copies every DLL in the distribution; never copy Unity proxy DLLs.
-                // 若独立 MOD 引用了 SDK Native，必须同时部署对应的原生辅助 DLL。
+                // Unified SDK v0.11+ ships one DLL. Keep copying the older Native DLL
+                // only when a legacy SDK project actually produced it; never bundle Unity proxies.
+                // 新版 SDK 只部署一份 DLL；旧工程仍兼容原先的 Native 辅助程序集。
                 for (String library : List.of("AstralParty.Modding.SDK.dll",
                         "AstralParty.Modding.SDK.Native.dll")) {
                     Path sdk = dll.getParent().resolve(library);

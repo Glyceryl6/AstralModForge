@@ -156,6 +156,10 @@ public class StandaloneBuildSupport {
     private static void copyProjectReferences(Path root, Document source, StringBuilder out,
                                               Map<String, Path> files, List<String> notes) throws IOException {
         NodeList projectRefs = source.getElementsByTagName("ProjectReference");
+        // MSBuild often uses two mutually exclusive references to the same SDK project.
+        // Treat both conditions as one export dependency instead of emitting duplicates.
+        // MSBuild 条件引用在导出工程中只应保留一次，避免重复项目和相同 DLL 引用。
+        Set<Path> copiedProjects = new java.util.HashSet<>();
         for (int i = 0; i < projectRefs.getLength(); i++) {
             Element e = (Element) projectRefs.item(i);
             String include = e.getAttribute("Include");
@@ -166,11 +170,14 @@ public class StandaloneBuildSupport {
             if (!Files.isRegularFile(original)) {
                 throw new IOException("关联 SDK 工程不存在 / Referenced C# project missing: " + original);
             }
+            if (!copiedProjects.add(original)) {
+                continue;
+            }
             // An exported SDK is an independent source copy, not an absolute reference back into the host MOD.
             // 保留 SDK 工程及源码；避免生成绝对路径 ProjectReference 导致 Rider 异常或移动后失效。
-            // The native SDK is a nested C# project that depends on the managed SDK.
-            // Copy their shared repository root once, preserving ProjectReference relative paths.
-            // 原生 SDK 是托管 SDK 的子工程，两者必须保留原本的相对目录关系。
+            // The SDK v0.11+ compiles Native/ sources in its root project.
+            // Keep support for older SDKs using a nested Native.csproj when exporting old MODs.
+            // 新版 SDK 单工程导出；旧版本的独立 Native 工程仍可向后兼容。
             Path projectRoot = original.getParent();
             boolean nativeSdk = original.getFileName().toString()
                     .equals("AstralParty.Modding.SDK.Native.csproj")
@@ -210,9 +217,9 @@ public class StandaloneBuildSupport {
             String relativeProject = projectRoot.relativize(original).toString().replace('\\', '/');
             out.append("    <ProjectReference Include=\"").append(xml(relativeDir)).append('/')
                     .append(xml(relativeProject)).append('"');
-            if (nativeSdk) {
-                // Re-exported native dependencies use the exported project's ForgePaths.props.
-                // 保证从 Rider 打开生成工程时 Native SDK 也能找到同一份游戏代理。
+            if (nativeSdk || managedSdk) {
+                // The unified SDK also needs proxy assemblies at design time and build time.
+                // 导出项目的 ForgePaths.props 同时提供 SDK 的游戏代理引用路径。
                 out.append(" AdditionalProperties=\"AstralInteropDir=$(ForgeInteropDir)\"");
             }
             out.append(" />\n");
