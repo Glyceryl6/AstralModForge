@@ -1,74 +1,71 @@
-# 星航 MOD 工坊 / Astral Mod Forge · v0.3.0
+# 星航 MOD 工坊 / Astral Mod Forge · v0.4.0
 
-**独立的 Java / JetBrains Rider 开发工具，不属于 AstralProbe MOD 本体的版本号。**
+**Astral Mod Forge 是独立的 Java / JetBrains Rider MOD 开发辅助插件，不属于 AstralProbe MOD 的版本序列。**
 
-从 Unity IL2CPP / HybridCLR + BepInEx 工程中勾选 C# 功能类，生成独立 MOD 的 `Plugin.cs`、依赖工程及本地化资源，并尝试编译、导出或部署 DLL；也支持只输入 MOD ID 创建空工程。
+从 Unity IL2CPP / HybridCLR + BepInEx 工程中勾选 C# 功能类，生成独立 MOD 的加载入口、依赖工程及可选择的本地化资源；也可以输入 MOD ID 创建空工程。工具支持依赖检查、源码可选导出、内嵌默认配置、构建日志及编译成功后复制 DLL 到游戏目录。
 
-> **验证状态**：Java 21 离线核心测试 69 项通过，并用 AstralProbe v0.47.0 的 `AutoPraiseService` 做了独立工程导出检查。当前运行环境没有真实 JetBrains Rider SDK 和 .NET 构建工具，因此**不能宣称已经完成 Rider 插件安装验证或游戏 DLL 编译／加载验证**。建议在本机使用 `gradle buildPlugin` 生成正式插件安装 ZIP。
+**[获取已正式构建的版本与更新说明 / GitHub Releases](../../releases)**
 
-## v0.3.0 的更新
+> 以前标记为 `preview-install.zip` 的安装包使用了模拟的 JetBrains API，可能在 Rider 中触发 `IncompatibleClassChangeError`。不要再安装那些预览包。只使用 GitHub Actions 通过**真实 Rider SDK** 编译且经字节码验证的 Release 附件。当前工程需要联网的 Gradle / Rider SDK 才能构建正式安装包。
 
-- **修复打开工具窗口时的空指针异常**：`BuildLogService` 在 `plugin.xml` 显式注册为项目服务。若旧 IDE 环境暂时不能返回该服务，则使用项目级备用日志实例；工具窗口与导出按钮共用同一个安全入口。
-- **尝试清理多余 Framework 文件**：导出阶段在配置开关改写前后进行依赖检查，将没有被保留功能引用的 `Framework/` 源码移出导出集合。仍被功能实际调用（包括 `using static`）的 Framework 辅助类保留并在报告中列出，不能为减小体积而把必需类型强行删除。
-- **内嵌默认配置（新选项，默认关闭）**：已知布尔功能开关继续固定为 `true`；勾选后，还可把具有安全字面量默认值的 `ConfigEntry<int/float/double/string>` 读取替换为常量。生成的 `ModLocalization` 使用 DLL 内嵌的 JSON，语言由导出选项固定，不生成新的 MOD 专属 `.cfg` 或默认 JSON；源功能直接写配置文件时停止导出，避免承诺失效。已有配置文件不会被自动删除。
-- **本地化兼容**：增加 `ModLanguageService.CurrentLocale` 的独立出口映射。
-- **测试与版本**：补充服务注册、Framework 清理、默认值解析和部署模拟检查，69 项通过，版本升级为 `0.3.0`。
+## 开发环境
 
-## 运行环境
-
-| 项目 | 说明 |
+| 项目 | 版本 |
 |---|---|
-| IDE | JetBrains Rider 2025.2.x，Gradle 目标 Rider SDK 2025.2.3 |
-| Java | JDK 21 |
+| IDE | Rider 2025.2.x（Gradle 构建目标 Rider 2025.2.3） |
+| JDK | 21 |
 | Gradle | 9.0+，IntelliJ Platform Gradle Plugin 2.20.0 |
-| MOD DLL | 支持 `net6.0` 的 .NET SDK、目标游戏可用的 BepInEx IL2CPP / SNWCreations 依赖 |
+| MOD DLL | `net6.0`，需要游戏对应的 BepInEx IL2CPP / SNWCreations 依赖 |
 
 ```bash
-gradle coreChecks       # 69 项 Java 核心检查
-gradle buildPlugin      # 使用真实 Rider SDK 构建 build/distributions/*.zip
-gradle runIde           # 在 IDE 沙盒中验证工具窗口和菜单
+gradle coreChecks                         # Java 核心回归检查
+gradle buildPlugin verifyPluginStructure  # 使用真正的 Rider SDK 构建与验证
+gradle standaloneCliJar                   # 创建可独立运行的 CLI JAR
+python3 scripts/test-rider-linkage.py     # 离线检查字节码拒绝规则
+python3 scripts/verify-rider-linkage.py build/distributions/<实际安装包>.zip
 ```
 
-无法下载 Gradle / Rider SDK 时，可先运行 `scripts/offline-core-checks.sh` 或 `scripts/offline-core-checks.ps1`，**这不等于实际 Rider 兼容性验证**。本仓库未附带 Gradle Wrapper 的二进制 JAR；请通过 Rider 的 Gradle 集成或本地 Gradle 9+ 执行。
+`buildPlugin` 的安装 ZIP 位于 `build/distributions/`。只能在真实 SDK 构建完成后安装；不要用模拟 API 编译 IDE 代码。联网时也可运行 `gradle runIde` 在沙盒 Rider 中实际打开导出界面。
 
-## 基本使用
+无法下载 Gradle 和 Rider SDK 时，可以先运行 `scripts/offline-core-checks.sh` 或 `.ps1` 进行基础检查，**这不等于插件兼容性验证**。
 
-在 Rider 的 **Tools → Astral Mod Forge** 中选择 **Create New MOD** 或 **Export Selected Classes**（菜单文本跟随 IDE 的中英文语言）。
+## 使用
 
-1. 勾选要作为独立功能的 C# 类；文件树可展开／折叠目录，会联动勾选类型依赖。
-2. 输入独立 MOD ID；检查加载入口与 Tick；运行 **Check dependencies** 预检。
-3. 选择翻译方式（内嵌 JSON 或固定文本）、是否**内嵌默认配置**、是否导出源码（默认关闭）、是否编译 DLL 和复制到游戏目录。
-4. 在底部构建日志窗口查看阶段与编译输出。只有真正产生 DLL 后才会部署到有效的 BepInEx 游戏目录。
+在 Rider 的 **Tools → Astral Mod Forge** 中选择 **Create New MOD** 或 **Export Selected Classes**（选项文本跟随 IDE 语言）。
 
-不勾选“导出源码”时，C# 工程生成在系统临时目录，完成后删除；交付目录只保留报告、清单、日志和实际编译成功的 DLL。勾选源码时，会阻止输出到原 C# 工程内部，以免触发重复类定义。
+1. 在可折叠文件树中勾选目标 C# 类；勾选时自动补齐可识别的依赖，取消时同步取消依赖它的功能。导出前可检查依赖报告。
+2. 输入独立 MOD ID，确认初始化入口和 Tick 调用。翻译方式可选内嵌 JSON 或固定文本。
+3. 选择是否内嵌默认配置、是否保留生成的 C# 源码（默认关闭）、是否编译 DLL，以及是否复制到已验证的游戏目录。
+4. 通过底部的构建日志观察进度；只有产生成功编译的 DLL 才允许部署。
 
-**默认配置内嵌不是万能的自动重构**：仅处理安全的字段读取和字面量默认值；自定义文件 I/O、Harmony 注册、反射、非字面量或可变配置对象仍需人工处理。`BasePlugin` 本身可在内存中构造 `ConfigFile`，但不代表会自动写入配置文件；本选项会避免生成的插件调用 `Config.Bind` 或 `Config.Save`。已存在的旧 `.cfg` 不会被清除。
+未选择源码导出时，编译中间目录采用临时路径；选择源码导出时，要求目标位置**位于原 C# 工程外部**，避免重复类定义。
 
-## CLI
+静态分析不是完整的 ReSharper / Roslyn 语义模型。反射、Harmony 注册、IL2CPP 运行时行为及游戏加载仍需要人工验证。复杂配置和不安全的自动重写会在导出前给出错误，而不是默默修改功能行为。
+
+## 自动构建和公开发布
+
+仓库包含 `.github/workflows/ci.yml`：每次推送 `main` 都使用真实 Rider SDK 构建并做兼容性检查；当 `gradle.properties` 中的 `modForgeVersion` **升级为新版本**并准备 `.github/release-notes/vX.Y.Z.md` 后，工作流自动创建对应 GitHub Release。该 Release 包含 Rider 安装 ZIP、CLI JAR 和 SHA256 文件，**更新内容放在 Release 正文，不放在 README 中**。
+
+只有将仓库设置为 **Public**，未登录 GitHub 的用户才可以直接下载公开的 Release 文件。PR 只构建不发布；已经存在的版本不会被覆盖。详细步骤见 [GitHub 发布说明](docs/GitHub自动发布-v0.4.0.md)。
+
+## 命令行
 
 ```bash
-java -jar AstralModForge-v0.3.0-standalone-cli.jar new --id=dev.example.hello --project=/path/to/workspace
+java -jar AstralModForge-v0.4.0-standalone-cli.jar new \
+  --id=dev.example.hello --project=/path/to/workspace
 
-java -jar AstralModForge-v0.3.0-standalone-cli.jar export \
+java -jar AstralModForge-v0.4.0-standalone-cli.jar export \
   --id=dev.example.praise --project=/path/to/AstralProbe \
   --classes=Features/Automation/AutoPraiseService.cs --embed-default-config
-
-# 仅导出可编辑 C# 工程，不执行 dotnet build
-java -jar AstralModForge-v0.3.0-standalone-cli.jar export \
-  --id=dev.example.praise --project=/path/to/AstralProbe \
-  --classes=Features/Automation/AutoPraiseService.cs --embed-default-config \
-  --export-source --no-build
 ```
 
-额外选项：`--lang=embedded|inline`、`--locale=zh_cn|en_us`、`--load=Namespace.Type::Initialize`、`--update=Namespace.Type::Tick`、`--output=/safe/output`、`--copy --game=/game/root`。
+其它选项：`--lang=embedded|inline`、`--locale=zh_cn|en_us`、`--load=Namespace.Type::Initialize`、`--update=Namespace.Type::Tick`、`--output=...`、`--export-source`、`--no-build`、`--copy --game=...`。
 
-## 文档与贡献
+## 文档
 
-- [使用手册 v0.3.0](docs/使用手册-v0.3.0.md)
-- [架构与限制 v0.3.0](docs/架构与限制-v0.3.0.md)
-- [更新记录 v0.3.0](docs/更新记录-v0.3.0.md)
-- [中文 Git 提交说明 v0.3.0](docs/Git提交说明-v0.3.0.md)
+- [使用手册 v0.4.0](docs/使用手册-v0.4.0.md)
+- [架构与限制 v0.4.0](docs/架构与限制-v0.4.0.md)
+- [GitHub 自动发布 v0.4.0](docs/GitHub自动发布-v0.4.0.md)
+- 版本更新日志：**[GitHub Releases](../../releases)**，或查看其维护来源 `.github/release-notes/vX.Y.Z.md`。
 
-本次提供**完整 Java 工程**与**相对于 v0.2.0 的分类 `git format-patch`** 两份独立 ZIP，适合先在本地验证再推送 GitHub。不要在已覆盖新工程的仓库中再次应用补丁。没有修改 AstralProbe MOD、SDK 或 ContentPreview 附属包。
-
-官方开发参考：[JetBrains 项目服务](https://plugins.jetbrains.com/docs/intellij/plugin-services.html)、[JetBrains 工具窗口](https://plugins.jetbrains.com/docs/intellij/tool-windows.html)、[BepInEx 配置](https://docs.bepinex.dev/master/articles/dev_guide/plugin_tutorial/4_configuration.html)。
+官方参考：[JetBrains Gradle Plugin 2.x](https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html)、[Plugin Verifier](https://plugins.jetbrains.com/docs/intellij/verifying-plugin-compatibility.html)、[GitHub Release CLI](https://cli.github.com/manual/gh_release_create)。
