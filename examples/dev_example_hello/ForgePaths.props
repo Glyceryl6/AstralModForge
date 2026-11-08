@@ -1,0 +1,8 @@
+<Project>
+  <!-- Edit ForgeInteropDir if the game was moved. / 游戏目录变化时修改 ForgeInteropDir。 -->
+  <PropertyGroup>
+    <ForgeInteropDir Condition="'$(ForgeInteropDir)' == '' and '$(ASTRAL_PARTY_INTEROP_DIR)' != ''">$(ASTRAL_PARTY_INTEROP_DIR)</ForgeInteropDir>
+    <ForgeInteropDir Condition="'$(ForgeInteropDir)' == '' and '$(ASTRAL_PARTY_GAME_DIR)' != ''">$(ASTRAL_PARTY_GAME_DIR)/BepInEx/interop</ForgeInteropDir>
+    <ForgeInteropDir Condition="'$(ForgeInteropDir)' == '' and Exists('$(MSBuildProjectDirectory)/lib/interop/Il2Cppmscorlib.dll')">$(MSBuildProjectDirectory)/lib/interop</ForgeInteropDir>
+  </PropertyGroup>
+</Project>

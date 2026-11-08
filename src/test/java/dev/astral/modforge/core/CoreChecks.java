@@ -463,14 +463,87 @@ public final class CoreChecks {
                     null,ForgeSpec.LanguageMode.EMBEDDED,"zh_cn","","",true,false,null,false);
             check(noSource.destination().startsWith(src) && !noSource.exportSource(),
                     "DLL-only export uses controlled in-project artifacts folder");
+            // The generated project needs the same IL2CPP proxy references as the host,
+            // but never copies the host's PluginInfoProps package or settings targets.
+            // 测试缺失的游戏代理引用及 BepInEx 独立 NuGet 源。
+            Path interop = src.resolve("lib/interop");
+            Files.createDirectories(interop);
+            for (String name : List.of("Il2Cppmscorlib", "UnityEngine.CoreModule",
+                    "UnityEngine.InputLegacyModule", "UnityEngine.TextRenderingModule", "Assembly-CSharp")) {
+                Files.writeString(interop.resolve(name + ".dll"), "test proxy");
+            }
+            StandaloneBuildSupport.Plan existing = new StandaloneBuildSupport().plan(noSource);
+            check(existing.interopDir() != null && existing.interopDir().equals(interop),
+                    "recognizes existing game interop proxy directory");
+            check(existing.references().contains("<Reference Include=\"UnityEngine.CoreModule\"")
+                    && existing.references().contains("<Reference Include=\"Assembly-CSharp\"")
+                    && existing.references().contains("<Private>false</Private>"),
+                    "references explicit Unity and game assemblies without copying them");
+            check(existing.nugetConfig().contains("https://nuget.bepinex.dev/v3/index.json")
+                    && existing.nugetConfig().contains("https://api.nuget.org/v3/index.json"),
+                    "export restores packages from independent NuGet feeds");
+
+            Path linked = base.resolve("linked");
+            Files.createDirectories(linked);
+            Path sdkProject = base.resolve("IndependentSdk/IndependentSdk.csproj");
+            Files.createDirectories(sdkProject.getParent());
+            Files.writeString(sdkProject, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>"
+                    + "<TargetFramework>net6.0</TargetFramework></PropertyGroup></Project>");
+            Files.writeString(sdkProject.getParent().resolve("Code.cs"),
+                    "namespace IndependentSdk { public class Code {} }");
+            Files.writeString(linked.resolve("Linked.csproj"), """
+                    <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>
+                      <TargetFramework>net6.0</TargetFramework>
+                      <AstralBepInExIl2CppPackageVersion>6.0.0-be.789</AstralBepInExIl2CppPackageVersion>
+                    </PropertyGroup><ItemGroup>
+                      <PackageReference Include="BepInEx.PluginInfoProps" Version="2.*" />
+                      <PackageReference Include="BepInEx.Unity.IL2CPP" Version="[$(AstralBepInExIl2CppPackageVersion)]" IncludeAssets="compile" />
+                      <ProjectReference Include="../IndependentSdk/IndependentSdk.csproj" />
+                    </ItemGroup></Project>
+                    """);
+            Files.writeString(linked.resolve("NuGet.Config"), """
+                    <configuration><packageSources><clear />
+                    <add key="extra" value="https://packages.example.com/v3/index.json" />
+                    </packageSources><packageSourceCredentials><account><add key="ClearTextPassword" value="SECRET" /></account></packageSourceCredentials>
+                    </configuration>
+                    """);
+            ForgeSpec linkedSpec = new ForgeSpec(linked, "dev.test.linked", List.of(), base.resolve("out"),
+                    ForgeSpec.LanguageMode.EMBEDDED, "zh_cn", "", "", false, false, null);
+            StandaloneBuildSupport.Plan linkedPlan = new StandaloneBuildSupport().plan(linkedSpec);
+            String linkedProject = ModTemplates.csproj(linkedSpec, linkedPlan.references());
+            check(!linkedProject.contains("PluginInfoProps") && linkedProject.contains("BepInEx.Unity.IL2CPP")
+                    && !linkedProject.contains("$(AstralBepInExIl2CppPackageVersion)"),
+                    "host-only PluginInfoProps removed, original pinned BepInEx version resolved");
+            check(linkedPlan.nugetConfig().contains("packages.example.com")
+                    && !linkedPlan.nugetConfig().contains("SECRET")
+                    && linkedPlan.nugetConfig().contains("nuget.bepinex.dev"),
+                    "source NuGet feeds retained without copying credentials");
+            check(linkedProject.contains("Dependencies/Projects/IndependentSdk/IndependentSdk.csproj")
+                    && !linkedProject.contains(sdkProject.toString())
+                    && linkedProject.contains("<DefaultItemExcludes>"),
+                    "SDK reference is portable and host excludes the SDK's sources");
+            check(linkedPlan.filesToCopy().containsKey("Dependencies/Projects/IndependentSdk/Code.cs"),
+                    "standalone SDK copy includes referenced project sources");
+
             if (!System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")) {
                 Path fakeSdk = base.resolve("fake-dotnet.sh");
                 Files.writeString(fakeSdk, """
                         #!/bin/sh
                         if [ "$1" = "--version" ]; then echo 8.0.0; exit 0; fi
-                        mkdir -p bin/Release/net6.0
-                        printf fake > bin/Release/net6.0/dev_test_auto.dll
-                        echo MockBuild succeeded
+                        if [ "$1" = "restore" ]; then
+                          echo "$@" | grep -q -- '--configfile' || exit 40
+                          test -f NuGet.Config || exit 41
+                          echo MockRestore succeeded
+                          exit 0
+                        fi
+                        if [ "$1" = "build" ]; then
+                          echo "$@" | grep -q -- '--no-restore' || exit 42
+                          mkdir -p bin/Release/net6.0
+                          printf fake > bin/Release/net6.0/dev_test_auto.dll
+                          echo MockBuild succeeded
+                          exit 0
+                        fi
+                        exit 43
                         """);
                 fakeSdk.toFile().setExecutable(true);
                 System.setProperty("astral.modforge.dotnet", fakeSdk.toString());
@@ -498,13 +571,97 @@ public final class CoreChecks {
                             "live build output observer receives compiler lines");
                     check(events.contains("phase:检查依赖") && events.stream().noneMatch(x -> x.contains("Resolving dependencies")),
                             "export progress messages follow the IDE language without bilingual duplicates");
-                    check(Files.readString(built.directory().resolve("build.log")).contains("MockBuild succeeded"),
-                            "complete build log retained alongside dist and report");
+                    String buildLog = Files.readString(built.directory().resolve("build.log"));
+                    check(buildLog.contains("MockRestore succeeded")
+                                    && buildLog.contains("MockBuild succeeded")
+                                    && buildLog.indexOf("MockRestore succeeded") < buildLog.indexOf("MockBuild succeeded"),
+                            "complete restore and build log retained in execution order");
                 } finally { System.clearProperty("astral.modforge.dotnet"); }
+            }
+
+            if (!System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")) {
+                Path failDotnet = base.resolve("fake-dotnet-restore-failure.sh");
+                Files.writeString(failDotnet, """
+                        #!/bin/sh
+                        if [ "$1" = "--version" ]; then echo 8.0.0; exit 0; fi
+                        if [ "$1" = "restore" ]; then echo "NU1101: package is missing"; exit 37; fi
+                        echo "ERROR: should never run build after failed restore"
+                        exit 38
+                        """);
+                failDotnet.toFile().setExecutable(true);
+                ForgeSpec failing = new ForgeSpec(src, "dev.test.restore-error",
+                        List.of(Path.of("Features/AutoSwitch.cs")), base.resolve("failed-out"),
+                        ForgeSpec.LanguageMode.EMBEDDED, "zh_cn", "", "", true, false, null, true, false);
+                System.setProperty("astral.modforge.dotnet", failDotnet.toString());
+                boolean failedClearly = false;
+                try {
+                    new ForgeExporter().export(failing);
+                } catch (IOException expected) {
+                    failedClearly = expected.getMessage().contains("NuGet");
+                } finally {
+                    System.clearProperty("astral.modforge.dotnet");
+                }
+                check(failedClearly, "NuGet failure throws instead of returning a successful export");
+                ForgeSpec failingDllOnly = new ForgeSpec(src, "dev.test.restore-no-source",
+                        List.of(Path.of("Features/AutoSwitch.cs")), base.resolve("failed-dll-only"),
+                        ForgeSpec.LanguageMode.EMBEDDED, "zh_cn", "", "", true, false, null, false, false);
+                System.setProperty("astral.modforge.dotnet", failDotnet.toString());
+                boolean dllOnlyFails = false;
+                try {
+                    new ForgeExporter().export(failingDllOnly);
+                } catch (IOException expected) {
+                    dllOnlyFails = expected.getMessage().contains("NuGet");
+                } finally {
+                    System.clearProperty("astral.modforge.dotnet");
+                }
+                check(dllOnlyFails, "DLL-only exports also fail immediately after unsuccessful restore");
+                try (Stream<Path> files = Files.walk(failingDllOnly.destination().resolve("Exports"))) {
+                    Set<String> names = files.map(path -> path.getFileName().toString()).collect(java.util.stream.Collectors.toSet());
+                    check(names.contains("build.log") && names.contains("export-report.md")
+                                    && !names.contains("MOD.csproj") && !names.contains("Plugin.cs"),
+                            "DLL-only failure retains diagnostics but cleans temporary C# sources");
+                }
+
+                Path failedExports = failing.destination().resolve("Exports");
+                try (Stream<Path> exported = Files.list(failedExports)) {
+                    Path failedDir = exported.findFirst().orElseThrow();
+                    check(Files.readString(failedDir.resolve("build.log")).contains("NU1101")
+                                    && Files.readString(failedDir.resolve("export-report.md")).contains("NuGet")
+                                    && !Files.exists(failedDir.resolve("dist/dev_test_restore_error.dll")),
+                            "failed restore retains build log/report and never deploys a nonexistent DLL");
+                }
+            }
+
+            if (!System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")) {
+                Path fakeBuild = base.resolve("fake-dotnet-no-dll.sh");
+                Files.writeString(fakeBuild, """
+                        #!/bin/sh
+                        if [ "$1" = "--version" ]; then echo 8.0.0; exit 0; fi
+                        if [ "$1" = "restore" ]; then echo Restored; exit 0; fi
+                        if [ "$1" = "build" ]; then echo BuildSucceededButNoArtifact; exit 0; fi
+                        exit 99
+                        """);
+                fakeBuild.toFile().setExecutable(true);
+                ForgeSpec missingDll = new ForgeSpec(src, "dev.test.no-artifact",
+                        List.of(Path.of("Features/AutoSwitch.cs")), base.resolve("no-dll-output"),
+                        ForgeSpec.LanguageMode.EMBEDDED, "zh_cn", "", "", true, false, null, true, false);
+                System.setProperty("astral.modforge.dotnet", fakeBuild.toString());
+                boolean error = false;
+                try {
+                    new ForgeExporter().export(missingDll);
+                } catch (IOException expected) {
+                    error = expected.getMessage().contains("DLL");
+                } finally {
+                    System.clearProperty("astral.modforge.dotnet");
+                }
+                check(error, "dotnet exit=0 without a DLL is not misreported as successful compilation");
             }
 
             ForgeExporter.Result fresh=new ForgeExporter().createEmpty(base,"dev.test.blank");
             check(Files.isRegularFile(fresh.directory().resolve("dev_test_blank.csproj")),"new standalone project .csproj");
+            check(Files.isRegularFile(fresh.directory().resolve("ForgePaths.props"))
+                    && Files.isRegularFile(fresh.directory().resolve("NuGet.Config")),
+                    "new project includes editable proxy paths and NuGet sources");
             check(Files.readString(fresh.directory().resolve("Features/SampleFeature.cs")).contains("Initialize()"),"new project activation");
             StringBuilder reason=new StringBuilder();check(!GameInstaller.valid(base,reason),"invalid game directory blocked");
             Path game=base.resolve("game");Files.createDirectories(game.resolve("BepInEx/plugins"));Files.createDirectories(game.resolve("BepInEx/core"));
@@ -532,6 +689,8 @@ public final class CoreChecks {
                 Files.writeString(fakeSdk, """
                         #!/bin/sh
                         if [ "$1" = "--version" ]; then echo 8.0.0; exit 0; fi
+                        if [ "$1" = "restore" ]; then exit 0; fi
+                        if [ "$1" != "build" ]; then exit 25; fi
                         grep -q 'ModLocalization.Initialize(Log)' Plugin.cs || exit 21
                         grep -q 'GetManifestResourceStream' ModLocalization.cs || exit 22
                         if grep -q 'Config.Bind' Plugin.cs; then exit 23; fi

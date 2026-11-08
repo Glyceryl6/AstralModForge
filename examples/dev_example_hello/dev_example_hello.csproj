@@ -1,4 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="ForgePaths.props" Condition="Exists('ForgePaths.props')" />
   <PropertyGroup>
     <TargetFramework>net6.0</TargetFramework>
     <AssemblyName>dev_example_hello</AssemblyName>
@@ -7,6 +8,10 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <DefineConstants Condition="Exists('$(ForgeInteropDir)/UnityEngine.ScreenCaptureModule.dll')">$(DefineConstants);ASTRAL_HAS_SCREENSHOT</DefineConstants>
+    <DefineConstants Condition="Exists('$(ForgeInteropDir)/UnityEngine.TextRenderingModule.dll')">$(DefineConstants);ASTRAL_HAS_TEXT_RENDERING</DefineConstants>
+    <!-- SDK project sources belong only to their own ProjectReference. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);Dependencies/Projects/**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="BepInEx.Unity.IL2CPP" Version="[6.0.0-be.789]" IncludeAssets="compile" />
@@ -14,9 +19,48 @@
     <PackageReference Include="SNWCreations.Il2CppInterop.Common" Version="[1.5.2-snw.4]" />
     <PackageReference Include="Il2CppInterop.Runtime" Version="1.5.3" ExcludeAssets="all" PrivateAssets="all" />
     <PackageReference Include="Il2CppInterop.Common" Version="1.5.3" ExcludeAssets="all" PrivateAssets="all" />
+    <Reference Include="Il2Cppmscorlib" Condition="Exists('$(ForgeInteropDir)/Il2Cppmscorlib.dll')">
+      <HintPath>$(ForgeInteropDir)/Il2Cppmscorlib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule" Condition="Exists('$(ForgeInteropDir)/UnityEngine.CoreModule.dll')">
+      <HintPath>$(ForgeInteropDir)/UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule" Condition="Exists('$(ForgeInteropDir)/UnityEngine.InputLegacyModule.dll')">
+      <HintPath>$(ForgeInteropDir)/UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppSystem" Condition="Exists('$(ForgeInteropDir)/Il2CppSystem.dll')">
+      <HintPath>$(ForgeInteropDir)/Il2CppSystem.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppSystem.Core" Condition="Exists('$(ForgeInteropDir)/Il2CppSystem.Core.dll')">
+      <HintPath>$(ForgeInteropDir)/Il2CppSystem.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule" Condition="Exists('$(ForgeInteropDir)/UnityEngine.TextRenderingModule.dll')">
+      <HintPath>$(ForgeInteropDir)/UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.ScreenCaptureModule" Condition="Exists('$(ForgeInteropDir)/UnityEngine.ScreenCaptureModule.dll')">
+      <HintPath>$(ForgeInteropDir)/UnityEngine.ScreenCaptureModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp" Condition="Exists('$(ForgeInteropDir)/Assembly-CSharp.dll')">
+      <HintPath>$(ForgeInteropDir)/Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Remove="Dependencies/Projects/**/*.cs" />
     <EmbeddedResource Include="lang/zh_cn.json" LogicalName="dev.example.hello.lang.zh_cn.json" />
     <EmbeddedResource Include="lang/en_us.json" LogicalName="dev.example.hello.lang.en_us.json" />
   </ItemGroup>
+  <Target Name="ValidateForgeInterop" BeforeTargets="ResolveReferences" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="'$(ForgeInteropDir)' == ''" Text="Missing IL2CPP game proxies: set ForgeInteropDir in ForgePaths.props to the game BepInEx/interop directory." />
+    <Error Condition="'$(ForgeInteropDir)' != '' and !Exists('$(ForgeInteropDir)/Il2Cppmscorlib.dll')" Text="Missing Il2Cppmscorlib.dll in ForgeInteropDir. Run the game with BepInEx IL2CPP once." />
+    <Error Condition="'$(ForgeInteropDir)' != '' and !Exists('$(ForgeInteropDir)/UnityEngine.CoreModule.dll')" Text="Missing UnityEngine.CoreModule.dll in ForgeInteropDir." />
+    <Error Condition="'$(ForgeInteropDir)' != '' and !Exists('$(ForgeInteropDir)/UnityEngine.InputLegacyModule.dll')" Text="Missing UnityEngine.InputLegacyModule.dll in ForgeInteropDir." />
+  </Target>
 </Project>
