@@ -1,8 +1,10 @@
 name: Build Rider plugin and publish Release
 
 on:
+  # Build on every branch push, not only repositories whose default branch is named main.
+  # 所有分支都可以触发构建；只有仓库的默认分支会自动发布。
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
@@ -32,11 +34,14 @@ jobs:
       - name: Check release version and notes
         run: python3 scripts/check-release-metadata.py
 
+      - name: Validate GitHub workflow triggers and publication rules
+        run: python3 scripts/check-workflow.py
+
       - name: Test bytecode rejection rules
         run: python3 scripts/test-rider-linkage.py
 
       - name: Run Java checks and build with the real Rider SDK
-        run: gradle --no-daemon coreChecks buildPlugin verifyPluginStructure standaloneCliJar
+        run: gradle --no-daemon --stacktrace coreChecks buildPlugin verifyPluginStructure standaloneCliJar
 
       - name: Reject incompatible JetBrains API linkage
         shell: bash
@@ -74,8 +79,8 @@ jobs:
   release:
     name: Publish versioned GitHub Release
     needs: build
-    # Pull requests and other branches never publish. / PR 与其它分支仅构建、不发布。
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    # Only publish from the actual default branch (main, master, etc.).
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -114,9 +119,17 @@ jobs:
             echo "Release **$TAG** already exists; no overwrite." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          TAG_OPTIONS=(--target "$GITHUB_SHA")
           if git ls-remote --tags --refs origin "refs/tags/$TAG" | grep -q .; then
-            echo "Git tag $TAG already exists without a release; refusing ambiguous publication." >&2
-            exit 1
+            # Tags may be created manually before CI. Publish only when the tag points to
+            # this verified commit; never attach unverified binaries to a different tag.
+            # 已有标签只有指向本次验证通过的提交才能发布。
+            TAG_COMMIT="$(git rev-list -n 1 "refs/tags/$TAG")"
+            if [[ "$TAG_COMMIT" != "$GITHUB_SHA" ]]; then
+              echo "Tag $TAG points to $TAG_COMMIT, not verified commit $GITHUB_SHA." >&2
+              exit 1
+            fi
+            TAG_OPTIONS=(--verify-tag)
           fi
 
           shopt -s nullglob
@@ -132,7 +145,7 @@ jobs:
           gh release create "$TAG" \
             "${zip_files[0]}" "${cli_files[0]}" release-dist/SHA256SUMS.txt \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
+            "${TAG_OPTIONS[@]}" \
             --title "Astral Mod Forge $TAG" \
             --notes-file "$NOTES" \
             --latest

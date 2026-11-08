@@ -2,7 +2,7 @@
   <Import Project="ForgePaths.props" Condition="Exists('ForgePaths.props')" />
   <PropertyGroup>
     <TargetFramework>net6.0</TargetFramework>
-    <AssemblyName>dev_example_hello</AssemblyName>
+    <AssemblyName>Dev.Example.Hello</AssemblyName>
     <Version>1.0.0</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
