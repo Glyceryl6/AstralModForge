@@ -80,6 +80,23 @@ public record ForgeSpec(Path sourceRoot, String modId, List<Path> selected, Path
         return name;
     }
 
+    /** A readable .NET assembly name; keep safeName for directories and C# namespaces. */
+    public String assemblyName() {
+        StringBuilder name = new StringBuilder();
+        for (String segment : this.modId.split("\\.")) {
+            if (!name.isEmpty()) {
+                name.append('.');
+            }
+            for (String token : segment.split("[-_]")) {
+                if (!token.isEmpty()) {
+                    name.append(Character.toUpperCase(token.charAt(0)));
+                    name.append(token.substring(1));
+                }
+            }
+        }
+        return name.toString();
+    }
+
     public String pluginNamespace() {
         return "AstralModForge.Generated." + safeName();
     }

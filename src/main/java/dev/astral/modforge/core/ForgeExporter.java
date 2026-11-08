@@ -55,18 +55,24 @@ public class ForgeExporter {
         Path target = unusedDirectory(projects, spec.safeName());
         Files.createDirectories(target);
         Path stage = spec.exportSource() ? target : Files.createTempDirectory("astral-mod-forge-build-");
-        StringBuilder report = new StringBuilder("# Astral Mod Forge v0.5.1 导出报告 / Export report\n\n" +
+        StringBuilder report = new StringBuilder("# Astral Mod Forge v0.5.2 导出报告 / Export report\n\n" +
                 "MOD ID: `" + spec.modId() + "`\n" +
                 "源工程 / Source: `" + spec.sourceRoot() + "`\n" +
                 "输出目录 / Output: `" + target + "`\n" +
                 "导出源码 / Export source: `" + spec.exportSource() + "`\n" +
                 "模式 / Language: `" + spec.languageMode() + ":" + spec.locale() + "`\n" +
+                "DLL 名称 / Assembly: `" + spec.assemblyName() + ".dll`\n" +
                 "内嵌默认配置 / Embed defaults: `" + spec.embedDefaultConfig() + "`\n\n" +
                 "## 依赖来源 / Copied classes\n");
         List<CSharpIndex.Unit> sorted = new ArrayList<>(plan.sources());
         sorted.sort(Comparator.comparing(u -> index.root().relativize(u.file()).toString()));
         for (CSharpIndex.Unit unit : sorted)
             report.append("- `").append(index.root().relativize(unit.file())).append("`\n");
+        report.append("\n## 语言资源 / Localization resources\n\n")
+                .append("- zh_cn: ").append(locale.zh().size()).append(" keys\n")
+                .append("- en_us: ").append(locale.en().size()).append(" keys\n")
+                .append("- 仅包含所选功能引用的键；无法推断的动态键需要显式声明。 / ")
+                .append("Only selected feature keys are embedded.\n");
         report.append("\n## 生成的启动入口 / Generated entrypoints\n\n")
                 .append("- Load: `").append(plan.loads().isEmpty() ? "(none)" : String.join("; ",
                         plan.loads().stream().map(e -> e.type()+"::"+e.method()).toList())).append("`\n")
@@ -85,7 +91,7 @@ public class ForgeExporter {
         notes.add("避免与原 MOD 同时启用重复功能；源项目 SDK 依赖可能需要单独部署。");
         for (String note : notes) report.append("- ").append(note).append("\n");
         report.append("\n## 编译 / Build\n\n");
-        Path outputDll = target.resolve("dist/" + spec.safeName() + ".dll");
+        Path outputDll = target.resolve("dist/" + spec.assemblyName() + ".dll");
         boolean built = false, deployed = false;
         try {
             emit(observer, "phase", "生成独立工程 / Generating standalone project");
@@ -103,19 +109,21 @@ public class ForgeExporter {
             write(stage, "Plugin.cs", ModTemplates.plugin(spec, namespace, plan.loads(), plan.updates()));
             write(stage, "ModLocalization.cs", ModTemplates.localization(spec, namespace));
             write(stage, "ModLanguageCompat.cs", ModTemplates.compatibility(namespace));
-            write(stage, "lang/zh_cn.json", JsonFlat.write(locale.zh()));
-            write(stage, "lang/en_us.json", JsonFlat.write(locale.en()));
+            if (spec.languageMode() == ForgeSpec.LanguageMode.EMBEDDED) {
+                write(stage, "lang/zh_cn.json", JsonFlat.write(locale.zh()));
+                write(stage, "lang/en_us.json", JsonFlat.write(locale.en()));
+            }
             for (CSharpIndex.Unit unit : sorted) {
                 Path relative = index.root().relativize(unit.file());
                 write(stage, "Source/" + relative.toString().replace('\\', '/'), locale.sources().get(unit.file()));
             }
             if (spec.exportSource()) {
-                write(stage, ".astral-mod-forge", "Astral Mod Forge 0.5.1\n" + spec.modId() + "\n");
+                write(stage, ".astral-mod-forge", "Astral Mod Forge 0.5.2\n" + spec.modId() + "\n");
                 write(stage, "README.md", "# " + spec.modId() + "\n\n" +
                         "独立导出工程。检查 export-report.md 以及 ForgePaths.props 中的 ForgeInteropDir；运行 `dotnet restore --configfile NuGet.Config`、`dotnet build --no-restore -c Release`。\n\n" +
                         "Check export-report.md and ForgePaths.props. Restore with NuGet.Config, then build.\n");
             }
-            StringBuilder manifest = new StringBuilder("# Astral Mod Forge v0.5.1 / 导出清单\n" +
+            StringBuilder manifest = new StringBuilder("# Astral Mod Forge v0.5.2 / 导出清单\n" +
                     "id=" + spec.modId() + "\n" + "language=" + spec.languageMode() + "\n" +
                     "locale=" + spec.locale() + "\n" + "source=" + spec.exportSource() + "\n" +
                     "embeddedDefaults=" + spec.embedDefaultConfig() + "\n" +
@@ -165,7 +173,7 @@ public class ForgeExporter {
                             observer.language()));
                 }
 
-                Path dll = stage.resolve("bin/Release/net6.0/" + spec.safeName() + ".dll");
+                Path dll = stage.resolve("bin/Release/net6.0/" + spec.assemblyName() + ".dll");
                 if (!Files.isRegularFile(dll) || Files.size(dll) == 0L) {
                     throw new IOException(ForgeText.select(
                             "编译未生成有效 DLL，请查看 build.log / "
@@ -267,7 +275,7 @@ public class ForgeExporter {
         write(destination, "lang/zh_cn.json", JsonFlat.write(Map.of(id+".sample.loaded", "示例功能已初始化")));
         write(destination, "lang/en_us.json", JsonFlat.write(Map.of(id+".sample.loaded", "Sample feature initialized")));
         write(destination, ".gitignore", "bin/\nobj/\n.idea/\n*.user\n");
-        write(destination, ".astral-mod-forge", "Astral Mod Forge 0.5.1\n"+id+"\n");
+        write(destination, ".astral-mod-forge", "Astral Mod Forge 0.5.2\n"+id+"\n");
         write(destination, "README.md", "# " + id + "\n\n" +
             "生成的 BepInEx Unity IL2CPP 独立 MOD 项目。使用 Rider 打开 `"+spec.safeName()+".csproj`，先在 ForgePaths.props 配置游戏的 BepInEx/interop 路径，再执行 `dotnet restore --configfile NuGet.Config` 和 `dotnet build -c Release --no-restore`。\n" +
             "\nGenerated standalone BepInEx IL2CPP project. Build with .NET 6 SDK.\n" +

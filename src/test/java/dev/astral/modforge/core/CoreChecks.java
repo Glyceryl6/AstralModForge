@@ -57,16 +57,98 @@ public final class CoreChecks {
             LocalizationTransformer.Result resources=new LocalizationTransformer().transform(src,embed,plan.sources());
             check(resources.errors().isEmpty(),"complete localization resources");
             check(resources.zh().get("dev.test.alpha.caption").equals("中文 \n说明"),"isolated translation keys");
+            check(resources.zh().size() == 1 && resources.en().size() == 1,
+                    "only referenced literal translation key is embedded");
+            check(embed.assemblyName().equals("Dev.Test.Alpha") &&
+                    new ForgeSpec(src, "dev.custom.some-mod", List.of(), base.resolve("out"),
+                            ForgeSpec.LanguageMode.EMBEDDED, "zh_cn", "", "", false, false, null)
+                            .assemblyName().equals("Dev.Custom.SomeMod"),
+                    "assembly names use readable dot-separated names instead of underscores");
+
+            Files.writeString(src.resolve("localization-templates/zh_cn.json"), """
+                    {"astralprobe.caption":"中文说明","astralprobe.label":"标签",
+                     "astralprobe.marks.self":"自己的标记", "astralprobe.marks.other":"另一种标记",
+                     "astralprobe.unused":"其它功能"}
+                    """);
+            Files.writeString(src.resolve("localization-templates/en_us.json"), """
+                    {"astralprobe.caption":"English caption","astralprobe.label":"Label",
+                     "astralprobe.marks.self":"Self mark", "astralprobe.marks.other":"Other mark",
+                     "astralprobe.unused":"Unrelated feature"}
+                    """);
+            Files.writeString(src.resolve("Features/DynamicMarks.cs"), """
+                    namespace Sample.Features {
+                        class DynamicMarks {
+                            private readonly struct Choice {
+                                internal readonly string NameKey;
+                                internal Choice(string key) { NameKey = key; }
+                            }
+                            private static readonly Choice[] Choices = {
+                                new("astralprobe.marks.self"),
+                                new("astralprobe.marks.other")
+                            };
+                            internal void Initialize() {
+                                var choice = Choices[0];
+                                var label = ModLocalization.Translate(choice.NameKey);
+                            }
+                        }
+                    }
+                    """);
+            ForgeSpec marksSpec = new ForgeSpec(src,"dev.test.marks",
+                    List.of(Path.of("Features/DynamicMarks.cs")),base.resolve("out"),
+                    ForgeSpec.LanguageMode.EMBEDDED,"zh_cn","","",false,false,null);
+            ForgeExporter.Result marks = new ForgeExporter().export(marksSpec);
+            Map<String, String> markTranslations = JsonFlat.parse(
+                    Files.readString(marks.directory().resolve("lang/zh_cn.json")));
+            check(markTranslations.size() == 2 && markTranslations.containsKey("astralprobe.marks.self") &&
+                    !markTranslations.containsKey("astralprobe.unused"),
+                    "dynamic NameKey list collects only keys present in selected source");
+            check(!Files.readString(marks.directory().resolve("lang/en_us.json")).contains("Unrelated feature"),
+                    "irrelevant localization never enters exported JSON");
+            check(Files.readString(marks.directory().resolve("export-report.md")).contains("zh_cn: 2 keys"),
+                    "export report includes exact localization count");
+
+            Files.writeString(src.resolve("Features/UnknownDynamic.cs"), """
+                    namespace Sample.Features {
+                        class UnknownDynamic {
+                            internal static string GetKey() => "unrelated";
+                            internal void Initialize() {
+                                string key = GetKey();
+                                var label = ModLocalization.Translate(key);
+                            }
+                        }
+                    }
+                    """);
+            ForgeSpec unknownSpec = new ForgeSpec(src,"dev.test.unknown",
+                    List.of(Path.of("Features/UnknownDynamic.cs")), base.resolve("out"),
+                    ForgeSpec.LanguageMode.EMBEDDED,"zh_cn","","",false,false,null);
+            try {
+                new ForgeExporter().export(unknownSpec);
+                throw new AssertionError("unresolved dynamic keys must fail preflight");
+            } catch (IOException expected) {
+                check(expected.getMessage().contains("localization-keys.txt"),
+                        "unknown dynamic translations fail without embedding the entire dictionary");
+            }
+            Files.writeString(src.resolve("localization-keys.txt"), "astralprobe.marks.*\n");
+            ForgeExporter.Result scoped = new ForgeExporter().export(unknownSpec);
+            check(JsonFlat.parse(Files.readString(scoped.directory().resolve("lang/zh_cn.json"))).size() == 2,
+                    "manifest can explicitly scope otherwise-unresolved dynamic keys");
+            Files.delete(src.resolve("localization-keys.txt"));
+
             ForgeExporter.Result exp=new ForgeExporter().export(embed);
             check(Files.isRegularFile(exp.directory().resolve("Source/Features/Alpha.Part.cs")),"copied partial source");
             check(Files.isRegularFile(exp.directory().resolve("Source/Features/Beta.cs")),"copied transitive source");
             check(Files.readString(exp.directory().resolve("Plugin.cs")).contains(".Tick(Time.realtimeSinceStartup)"),"generated Update invocation");
             check(Files.readString(exp.directory().resolve("Source/Features/Alpha.cs")).contains("dev.test.alpha.caption"),"key rewritten");
             check(Files.readString(exp.directory().resolve("MOD.csproj")).contains("EmbeddedResource"),"embedded language resources");
+            check(Files.readString(exp.directory().resolve("MOD.csproj")).contains("<AssemblyName>Dev.Test.Alpha</AssemblyName>"),
+                    "MSBuild AssemblyName matches the readable DLL name");
             ForgeSpec inline=new ForgeSpec(src,"dev.test.fixed",List.of(Path.of("Features/Alpha.cs")),base.resolve("out"),
                     ForgeSpec.LanguageMode.INLINE,"en_us","","",false,false,null);
             ForgeExporter.Result fixed=new ForgeExporter().export(inline);
             check(Files.readString(fixed.directory().resolve("Source/Features/Alpha.cs")).contains("\"English caption\""),"inline text");
+            check(!Files.exists(fixed.directory().resolve("lang/zh_cn.json")) &&
+                    !Files.readString(fixed.directory().resolve("MOD.csproj")).contains("EmbeddedResource Include=\"lang/"),
+                    "fixed-text export embeds no JSON dictionaries");
 
             Files.writeString(src.resolve("Features/Second.cs"),
                     "namespace Sample.Features { internal class Second { internal void Tick(float now) {} internal void Initialize() {} } }");
@@ -539,7 +621,7 @@ public final class CoreChecks {
                         if [ "$1" = "build" ]; then
                           echo "$@" | grep -q -- '--no-restore' || exit 42
                           mkdir -p bin/Release/net6.0
-                          printf fake > bin/Release/net6.0/dev_test_auto.dll
+                          printf fake > bin/Release/net6.0/Dev.Test.Auto.dll
                           echo MockBuild succeeded
                           exit 0
                         fi
@@ -627,7 +709,7 @@ public final class CoreChecks {
                     Path failedDir = exported.findFirst().orElseThrow();
                     check(Files.readString(failedDir.resolve("build.log")).contains("NU1101")
                                     && Files.readString(failedDir.resolve("export-report.md")).contains("NuGet")
-                                    && !Files.exists(failedDir.resolve("dist/dev_test_restore_error.dll")),
+                                    && !Files.exists(failedDir.resolve("dist/Dev.Test.RestoreError.dll")),
                             "failed restore retains build log/report and never deploys a nonexistent DLL");
                 }
             }
@@ -696,7 +778,7 @@ public final class CoreChecks {
                         if grep -q 'Config.Bind' Plugin.cs; then exit 23; fi
                         if grep -q 'File.WriteAllText' ModLocalization.cs; then exit 24; fi
                         mkdir -p bin/Release/net6.0
-                        printf fake > bin/Release/net6.0/dev_test_embedded_install.dll
+                        printf fake > bin/Release/net6.0/Dev.Test.EmbeddedInstall.dll
                         echo EmbeddedConfigMock succeeded
                         """);
                 fakeSdk.toFile().setExecutable(true);
@@ -708,7 +790,7 @@ public final class CoreChecks {
                     ForgeExporter.Result deployedEmbedded = new ForgeExporter().export(embeddedDeploy);
                     check(deployedEmbedded.compiled() && deployedEmbedded.deployed(),
                             "embedded-default DLL deployed after successful mock build");
-                    check(Files.isRegularFile(game.resolve("BepInEx/plugins/dev_test_embedded_install/dev_test_embedded_install.dll")) &&
+                    check(Files.isRegularFile(game.resolve("BepInEx/plugins/dev_test_embedded_install/Dev.Test.EmbeddedInstall.dll")) &&
                             !Files.exists(game.resolve("BepInEx/config/dev.test.embedded-install.cfg")) &&
                             !Files.exists(game.resolve("BepInEx/config/dev.test.embedded-install/lang")),
                             "deploy copies DLL without generating sidecar default config or language files");
