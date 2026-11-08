@@ -90,7 +90,7 @@ public class Main {
     }
 
     private static void usage() {
-        System.out.println("Astral Mod Forge v0.3.0\n" +
+        System.out.println("Astral Mod Forge v0.4.0\n" +
                 "  new --id=dev.example.mod [--project=/path/to/workspace]\n" +
                 "  export --id=dev.example.mod --project=/path/to/csproj-dir --classes=Features/A.cs,Features/B.cs\n" +
                 "      [--lang=embedded|inline] [--locale=zh_cn|en_us]\n" +

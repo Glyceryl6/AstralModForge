@@ -1,33 +1,140 @@
-name: Java checks and Rider plugin build
+name: Build Rider plugin and publish Release
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
+    name: Java checks / Official Rider SDK build
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    timeout-minutes: 50
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
       - name: Install Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
+
       - name: Configure Gradle 9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.1.0'
-      - name: Core checks
-        run: gradle --no-daemon coreChecks
-      - name: Build official Rider plugin ZIP
-        run: gradle --no-daemon buildPlugin
-      - name: Upload Rider plugin artifact
+
+      - name: Check release version and notes
+        run: python3 scripts/check-release-metadata.py
+
+      - name: Test bytecode rejection rules
+        run: python3 scripts/test-rider-linkage.py
+
+      - name: Run Java checks and build with the real Rider SDK
+        run: gradle --no-daemon coreChecks buildPlugin verifyPluginStructure standaloneCliJar
+
+      - name: Reject incompatible JetBrains API linkage
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=(build/distributions/*.zip)
+          if (( ${#archives[@]} != 1 )); then
+            echo "Expected one official buildPlugin distribution, got ${#archives[@]}" >&2
+            exit 1
+          fi
+          python3 scripts/verify-rider-linkage.py "${archives[0]}"
+
+      - name: Prepare checksummed distributions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-dist
+          cp build/distributions/*.zip release-dist/
+          cp build/cli/*-standalone-cli.jar release-dist/
+          (
+            cd release-dist
+            sha256sum -- *.zip *.jar > SHA256SUMS.txt
+            sha256sum -c SHA256SUMS.txt
+          )
+
+      - name: Upload verified artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: AstralModForge-Rider-v0.3.0
-          path: build/distributions/*.zip
+          name: AstralModForge-verified-distributions
+          path: release-dist/*
           if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish versioned GitHub Release
+    needs: build
+    # Pull requests and other branches never publish. / PR 与其它分支仅构建、不发布。
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: astral-mod-forge-release
+      cancel-in-progress: false
+    steps:
+      - name: Checkout release notes and metadata
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download verified assets
+        uses: actions/download-artifact@v4
+        with:
+          name: AstralModForge-verified-distributions
+          path: release-dist
+
+      - name: Publish new version only after checks passed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="$(python3 scripts/check-release-metadata.py --print-tag)"
+          NOTES=".github/release-notes/${TAG}.md"
+          (
+            cd release-dist
+            sha256sum -c SHA256SUMS.txt
+          )
+
+          # 已发布版本不能被后续 main 提交的不同代码静默覆盖。
+          # Existing releases are immutable; bump modForgeVersion for a new release.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $TAG already exists; build succeeded, no new release created."
+            echo "Release **$TAG** already exists; no overwrite." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if git ls-remote --tags --refs origin "refs/tags/$TAG" | grep -q .; then
+            echo "Git tag $TAG already exists without a release; refusing ambiguous publication." >&2
+            exit 1
+          fi
+
+          shopt -s nullglob
+          zip_files=(release-dist/*.zip)
+          cli_files=(release-dist/*-standalone-cli.jar)
+          if (( ${#zip_files[@]} != 1 || ${#cli_files[@]} != 1 )); then
+            echo "Missing/ambiguous official Rider ZIP or CLI JAR." >&2
+            exit 1
+          fi
+
+          # gh release create 自动在本次通过检查的提交上创建版本标签。
+          # This tag/release is created only after the full verified build succeeds.
+          gh release create "$TAG" \
+            "${zip_files[0]}" "${cli_files[0]}" release-dist/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Astral Mod Forge $TAG" \
+            --notes-file "$NOTES" \
+            --latest
+
+          echo "Published **$TAG** to GitHub Releases." >> "$GITHUB_STEP_SUMMARY"

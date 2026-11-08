@@ -4,19 +4,27 @@ plugins {
 }
 
 group = 'dev.astral'
-version = '0.3.0'
+version = providers.gradleProperty('modForgeVersion').get()
 
 repositories {
     mavenCentral()
-    intellijPlatform { defaultRepositories() }
+    intellijPlatform {
+        defaultRepositories()
+    }
 }
 
 dependencies {
-    intellijPlatform { rider('2025.2.3') }
+    // 必须使用真正的 Rider 依赖进行编译，禁止用 IDE API 替身制作可安装 JAR。
+    // Compile against the real Rider Platform API, never synthetic SDK stubs.
+    intellijPlatform {
+        rider('2025.2.3')
+    }
 }
 
 java {
-    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
 }
 
 intellijPlatform {
@@ -25,7 +33,9 @@ intellijPlatform {
         id = 'dev.astral.modforge'
         name = 'Astral Mod Forge'
         version = project.version.toString()
-        ideaVersion { sinceBuild = '252' }
+        ideaVersion {
+            sinceBuild = '252'
+        }
     }
 }
 
@@ -33,4 +43,21 @@ tasks.register('coreChecks', JavaExec) {
     dependsOn tasks.named('testClasses')
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'dev.astral.modforge.core.CoreChecks'
+}
+
+// CLI 独立分发，不打包任何 IntelliJ Platform API 类。
+// Distribute the standalone core/CLI without bundled IDE API classes.
+tasks.register('standaloneCliJar', Jar) {
+    dependsOn tasks.named('classes')
+    archiveBaseName = 'AstralModForge'
+    archiveVersion = "v${project.version}"
+    archiveClassifier = 'standalone-cli'
+    destinationDirectory = layout.buildDirectory.dir('cli')
+    from(sourceSets.main.output) {
+        include 'dev/astral/modforge/core/**'
+        include 'dev/astral/modforge/cli/**'
+    }
+    manifest {
+        attributes 'Main-Class': 'dev.astral.modforge.cli.Main'
+    }
 }
