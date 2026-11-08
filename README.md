@@ -2,9 +2,12 @@
 
 Astral Mod Forge 是面向 Unity IL2CPP / BepInEx MOD 的 Rider 辅助工具，用于创建独立 MOD 工程、分析源码依赖、生成可独立编译的 C# 工程并导出 DLL。
 
-**当前版本：v0.5.0**
+**当前版本：v0.5.1**
 
 ## 文档
+
+- [v0.5.1 独立工程还原与编译排查](docs/独立工程还原与编译-v0.5.1.md)
+- [v0.5.1 Release 更新说明](.github/release-notes/v0.5.1.md)
 
 - [v0.5.0 使用手册](docs/使用手册-v0.5.0.md)
 - [v0.5.0 架构与限制](docs/架构与限制-v0.5.0.md)
