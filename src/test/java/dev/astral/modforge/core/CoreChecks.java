@@ -761,6 +761,13 @@ public final class CoreChecks {
             String descriptor = Files.readString(Path.of("src/main/resources/META-INF/plugin.xml"));
             check(descriptor.contains("<projectService serviceImplementation=\"dev.astral.modforge.ide.BuildLogService\""),
                     "BuildLogService registered as a project service");
+            check(descriptor.contains("id=\"dev.astral.modforge.ExportContext\"")
+                            && descriptor.contains("group-id=\"EditorPopupMenu\"")
+                            && descriptor.contains("group-id=\"ProjectViewPopupMenu\""),
+                    "C# export action registered in editor and project context menus");
+            check(Files.readString(Path.of("src/main/java/dev/astral/modforge/ide/ExportModAction.java"))
+                            .contains("CommonDataKeys.VIRTUAL_FILE"),
+                    "context export handles editor single-file selections");
             String toolWindowFactory = Files.readString(Path.of("src/main/java/dev/astral/modforge/ide/ForgeToolWindowFactory.java"));
             check(toolWindowFactory.contains("BuildLogService.getInstance(project)") &&
                     Files.readString(Path.of("src/main/java/dev/astral/modforge/ide/ExportModAction.java"))

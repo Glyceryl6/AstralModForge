@@ -20,6 +20,7 @@ import org.jetbrains.annotations.NotNull;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /** Rider menu entry; no project objects are retained in fields. / 菜单动作不持有工程引用。 */
 public class ExportModAction extends AnAction {
@@ -30,7 +31,13 @@ public class ExportModAction extends AnAction {
 
     @Override
     public void update(@NotNull AnActionEvent event) {
-        event.getPresentation().setEnabled(event.getProject() != null);
+        boolean projectOpen = event.getProject() != null;
+        boolean popup = event.getPlace().toLowerCase(Locale.ROOT).contains("popup");
+        if (popup) {
+            event.getPresentation().setEnabledAndVisible(projectOpen && !collectSelectedFiles(event).isEmpty());
+        } else {
+            event.getPresentation().setEnabled(projectOpen);
+        }
     }
 
     @Override
@@ -68,13 +75,17 @@ public class ExportModAction extends AnAction {
     private List<Path> collectSelectedFiles(AnActionEvent event) {
         List<Path> selected = new ArrayList<>();
         VirtualFile[] files = event.getData(CommonDataKeys.VIRTUAL_FILE_ARRAY);
-        if (files == null) {
-            return selected;
+        if (files == null || files.length == 0) {
+            VirtualFile current = event.getData(CommonDataKeys.VIRTUAL_FILE);
+            files = current == null ? new VirtualFile[0] : new VirtualFile[]{current};
         }
 
         for (VirtualFile file : files) {
             if (!file.isDirectory() && file.getPath().endsWith(".cs")) {
-                selected.add(Path.of(file.getPath()));
+                Path path = Path.of(file.getPath());
+                if (!selected.contains(path)) {
+                    selected.add(path);
+                }
             }
         }
         return selected;

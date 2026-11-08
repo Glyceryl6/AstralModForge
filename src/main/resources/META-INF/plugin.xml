@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>dev.astral.modforge</id>
     <name>Astral Mod Forge</name>
-    <version>0.5.1</version>
+    <version>0.5.2</version>
     <idea-version since-build="252"/>
     <vendor>Astral Mod Forge Community</vendor>
     <description><![CDATA[
@@ -21,5 +21,11 @@
             <action id="dev.astral.modforge.New" class="dev.astral.modforge.ide.NewModAction" />
             <action id="dev.astral.modforge.Export" class="dev.astral.modforge.ide.ExportModAction" />
         </group>
+        <!-- Right-click a C# file in the editor or project tree. / C# 文件右键直接导出。 -->
+        <action id="dev.astral.modforge.ExportContext"
+                class="dev.astral.modforge.ide.ExportModAction">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        </action>
     </actions>
 </idea-plugin>
