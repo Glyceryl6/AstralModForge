@@ -2,20 +2,32 @@ package dev.astral.modforge.ide;
 
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Key;
-import javax.swing.*;
+
+import javax.swing.JLabel;
+import javax.swing.JTextArea;
+import javax.swing.SwingUtilities;
+import javax.swing.text.BadLocationException;
 
 /**
  * Project-scoped build console registered in plugin.xml.
- * 构建日志在 plugin.xml 中显式注册；旧安装环境缺少服务时使用项目内备用实例。
+ * 构建日志在 plugin.xml 中注册；如服务不可用则使用项目内的备用实例。
  */
 public class BuildLogService {
     private static final Key<BuildLogService> FALLBACK = Key.create("astral.modforge.buildLog.fallback");
 
+    private final StringBuilder history = new StringBuilder();
+    private JTextArea console;
+    private JLabel phaseLabel;
+    private String phase = "";
+
     public static BuildLogService getInstance(Project project) {
         BuildLogService service = project.getService(BuildLogService.class);
-        if (service != null) return service;
-        // Avoid crashing the tool window when an older IDE fails to create the service.
-        // 旧版环境缺失项目服务时不阻止打开工具窗口；备用实例只属于当前项目。
+        if (service != null) {
+            return service;
+        }
+
+        // 只在当前项目范围内回退，不能修复使用错误 SDK 编译的二进制文件。
+        // Project-local fallback; incompatible compiled APIs must be rebuilt, not caught.
         synchronized (project) {
             BuildLogService fallback = project.getUserData(FALLBACK);
             if (fallback == null) {
@@ -25,16 +37,12 @@ public class BuildLogService {
             return fallback;
         }
     }
-    private final StringBuilder history = new StringBuilder();
-    private JTextArea console;
-    private JLabel phaseLabel;
-    private String phase = "";
 
     public synchronized void attach(JTextArea output, JLabel status) {
-        console = output;
-        phaseLabel = status;
-        String previous = history.toString();
-        String currentPhase = phase;
+        this.console = output;
+        this.phaseLabel = status;
+        String previous = this.history.toString();
+        String currentPhase = this.phase;
         SwingUtilities.invokeLater(() -> {
             output.setText(previous);
             output.setCaretPosition(output.getDocument().getLength());
@@ -43,31 +51,47 @@ public class BuildLogService {
     }
 
     public synchronized void clear() {
-        history.setLength(0);
-        phase = "";
+        this.history.setLength(0);
+        this.phase = "";
         SwingUtilities.invokeLater(() -> {
-            if (console != null) console.setText("");
-            if (phaseLabel != null) phaseLabel.setText("");
+            if (this.console != null) {
+                this.console.setText("");
+            }
+            if (this.phaseLabel != null) {
+                this.phaseLabel.setText("");
+            }
         });
     }
 
     public synchronized void event(String kind, String message) {
-        if ("phase".equals(kind)) phase = message;
+        if ("phase".equals(kind)) {
+            this.phase = message;
+        }
+
         String text = ("phase".equals(kind) ? "\n[STEP] " : "") + message + "\n";
-        history.append(text);
-        // Keep the in-memory preview bounded. The full dotnet output lives in build.log.
-        if (history.length() > 1_000_000) history.delete(0, history.length() - 750_000);
-        String currentPhase = phase;
+        this.history.append(text);
+        // 内存预览设上限；完整 dotnet 构建输出保留在 build.log。
+        if (this.history.length() > 1_000_000) {
+            this.history.delete(0, this.history.length() - 750_000);
+        }
+
+        String currentPhase = this.phase;
         SwingUtilities.invokeLater(() -> {
-            if (console != null) {
-                console.append(text);
-                if (console.getDocument().getLength() > 1_000_000) {
-                    try { console.getDocument().remove(0, 250_000); }
-                    catch (javax.swing.text.BadLocationException ignored) { }
+            if (this.console != null) {
+                this.console.append(text);
+                if (this.console.getDocument().getLength() > 1_000_000) {
+                    try {
+                        this.console.getDocument().remove(0, 250_000);
+                    } catch (BadLocationException ignored) {
+                        // 内容已经变化；下一轮日志仍可继续显示。
+                    }
                 }
-                console.setCaretPosition(console.getDocument().getLength());
+                this.console.setCaretPosition(this.console.getDocument().getLength());
             }
-            if (phaseLabel != null) phaseLabel.setText(currentPhase);
+
+            if (this.phaseLabel != null) {
+                this.phaseLabel.setText(currentPhase);
+            }
         });
     }
 }

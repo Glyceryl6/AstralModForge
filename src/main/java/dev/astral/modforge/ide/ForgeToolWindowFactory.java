@@ -6,26 +6,44 @@ import com.intellij.openapi.wm.ToolWindowFactory;
 import com.intellij.ui.content.Content;
 import com.intellij.ui.content.ContentFactory;
 import org.jetbrains.annotations.NotNull;
-import javax.swing.*;
-import java.awt.*;
 
-/** Displays build phases and streams compiler output without opening an external terminal. */
+import javax.swing.JButton;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
+import java.awt.BorderLayout;
+import java.awt.FlowLayout;
+import java.awt.Font;
+
+/** Displays build phases and compiler output without opening an external terminal. */
 public class ForgeToolWindowFactory implements ToolWindowFactory {
-    @Override public void createToolWindowContent(@NotNull Project project, @NotNull ToolWindow toolWindow) {
+    @Override
+    public void createToolWindowContent(@NotNull Project project, @NotNull ToolWindow toolWindow) {
         JPanel panel = new JPanel(new BorderLayout(0, 6));
         JLabel status = new JLabel(I18n.get("console.ready"));
         JTextArea output = new JTextArea();
         output.setEditable(false);
         output.setFont(new Font(Font.MONOSPACED, Font.PLAIN, output.getFont().getSize()));
+
         panel.add(status, BorderLayout.NORTH);
         panel.add(new JScrollPane(output), BorderLayout.CENTER);
+
         JButton clear = new JButton(I18n.get("console.clear"));
-        clear.addActionListener(e -> BuildLogService.getInstance(project).clear());
+        clear.addActionListener(event -> BuildLogService.getInstance(project).clear());
+
         JButton copy = new JButton(I18n.get("console.copy"));
-        copy.addActionListener(e -> { output.selectAll(); output.copy(); output.select(0,0); });
+        copy.addActionListener(event -> {
+            output.selectAll();
+            output.copy();
+            output.select(0, 0);
+        });
+
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        buttons.add(copy); buttons.add(clear);
+        buttons.add(copy);
+        buttons.add(clear);
         panel.add(buttons, BorderLayout.SOUTH);
+
         BuildLogService.getInstance(project).attach(output, status);
         Content content = ContentFactory.getInstance().createContent(panel, "", false);
         toolWindow.getContentManager().addContent(content);

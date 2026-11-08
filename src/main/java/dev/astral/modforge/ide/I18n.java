@@ -6,5 +6,8 @@ import com.intellij.DynamicBundle;
 class I18n {
     private static final DynamicBundle BUNDLE = new DynamicBundle(
             I18n.class, "dev.astral.modforge.i18n.Messages");
-    static String get(String key, Object... args) { return BUNDLE.getMessage(key, args); }
+
+    static String get(String key, Object... args) {
+        return BUNDLE.getMessage(key, args);
+    }
 }

@@ -8,7 +8,9 @@ import java.util.*;
 
 /** Buildable standalone C# entry point + per-MOD localization. / 独立运行框架与内嵌资源模板。 */
 public class ModTemplates {
-    private static String escape(String s) { return s.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;"); }
+    private static String escape(String value) {
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;");
+    }
 
     public static String csproj(ForgeSpec s) {
         String references = sourceReferences(s.sourceRoot());

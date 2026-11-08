@@ -57,26 +57,37 @@ public class CSharpIndex {
                 Set<String> usings = groups(USING, code, 1);
                 Set<String> identifiers = groups(NAME, code, 0);
                 Unit unit = new Unit(file, namespace, types, usings, content, code, identifiers);
-                units.put(file, unit);
+                this.units.put(file, unit);
                 for (String type : types) {
-                    byShortName.computeIfAbsent(type, key -> new ArrayList<>()).add(unit);
-                    byQualifiedName.computeIfAbsent(namespace.isEmpty() ? type : namespace + "." + type,
+                    this.byShortName.computeIfAbsent(type, key -> new ArrayList<>()).add(unit);
+                    this.byQualifiedName.computeIfAbsent(namespace.isEmpty() ? type : namespace + "." + type,
                             key -> new ArrayList<>()).add(unit);
                 }
             }
         }
     }
 
-    public Path root() { return root; }
-    public Map<Path, Unit> units() { return Collections.unmodifiableMap(units); }
-    public Unit unit(Path file) { return units.get(file.toAbsolutePath().normalize()); }
-    public List<Unit> sameType(String fqName) { return byQualifiedName.getOrDefault(fqName, List.of()); }
+    public Path root() {
+        return this.root;
+    }
+
+    public Map<Path, Unit> units() {
+        return Collections.unmodifiableMap(this.units);
+    }
+
+    public Unit unit(Path file) {
+        return this.units.get(file.toAbsolutePath().normalize());
+    }
+
+    public List<Unit> sameType(String fqName) {
+        return this.byQualifiedName.getOrDefault(fqName, List.of());
+    }
 
     public Set<Unit> dependencies(Unit from, List<String> errors) {
         Set<Unit> result = new LinkedHashSet<>();
         for (String id : from.identifiers) {
             if (id.equals("Plugin") || id.equals("ModLocalization") || id.equals("ModLanguageService")) continue;
-            List<Unit> matches = byShortName.getOrDefault(id, List.of());
+            List<Unit> matches = this.byShortName.getOrDefault(id, List.of());
             if (matches.isEmpty()) continue;
             Map<String, List<Unit>> candidates = new LinkedHashMap<>();
             for (Unit match : matches) {
@@ -96,7 +107,7 @@ public class CSharpIndex {
                     .filter(fq -> from.usings.contains(fq.substring(0, fq.lastIndexOf('.'))))
                     .toList();
             if (namespaces.size() == 1) result.addAll(candidates.get(namespaces.get(0)));
-            else errors.add("有歧义的类型 / Ambiguous C# type '" + id + "' in " + root.relativize(from.file));
+            else errors.add("有歧义的类型 / Ambiguous C# type '" + id + "' in " + this.root.relativize(from.file));
         }
         result.remove(from);
         return result;
@@ -126,7 +137,9 @@ public class CSharpIndex {
     private static Set<String> groups(Pattern pattern, String content, int index) {
         Set<String> result = new LinkedHashSet<>();
         Matcher matcher = pattern.matcher(content);
-        while (matcher.find()) result.add(matcher.group(index));
+        while (matcher.find()) {
+            result.add(matcher.group(index));
+        }
         return result;
     }
 
@@ -165,6 +178,7 @@ public class CSharpIndex {
         }
         return new String(result);
     }
+
     private static void blank(char[] result, int start, int end) {
         for (int j = start; j < end; j++) if (result[j] != '\n' && result[j] != '\r') result[j] = ' ';
     }

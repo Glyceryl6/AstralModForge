@@ -12,17 +12,25 @@ import java.util.regex.Pattern;
  */
 public class DependencyPlanner {
     public record Entry(String type, String method, boolean isStatic, boolean takesTime, String kind) {
-        String call(String variable) { return (isStatic ? type : variable) + "." + method + "(" + (takesTime ? "UnityEngine.Time.realtimeSinceStartup" : "") + ");"; }
+        String call(String variable) {
+            return (this.isStatic ? this.type : variable) + "." + this.method + "("
+                    + (this.takesTime ? "UnityEngine.Time.realtimeSinceStartup" : "") + ");";
+        }
     }
+
     public record Plan(Set<CSharpIndex.Unit> sources, List<String> warnings, List<String> errors,
                        List<Entry> loads, List<Entry> updates, Map<Path,String> rewrittenSources) {
-        public boolean ready() { return errors.isEmpty(); }
+        public boolean ready() {
+            return this.errors.isEmpty();
+        }
     }
 
     private final CSharpIndex index;
     private static final Pattern ENTRY = Pattern.compile("\\b(public|internal|private|protected)?\\s*(static\\s+)?(?:void)\\s+([A-Za-z_]\\w*)\\s*\\(([^)]*)\\)");
 
-    public DependencyPlanner(CSharpIndex index) { this.index = index; }
+    public DependencyPlanner(CSharpIndex index) {
+        this.index = index;
+    }
 
     public Plan plan(ForgeSpec spec) throws IOException {
         List<String> errors = new ArrayList<>();
@@ -30,8 +38,8 @@ public class DependencyPlanner {
         Set<CSharpIndex.Unit> initial = new LinkedHashSet<>();
         for (Path p : spec.selected()) {
             Path file = p.isAbsolute() ? p.normalize() : spec.sourceRoot().resolve(p).normalize();
-            if (!file.startsWith(index.root())) { errors.add("文件位于项目之外 / Outside project: " + p); continue; }
-            CSharpIndex.Unit unit = index.unit(file);
+            if (!file.startsWith(this.index.root())) { errors.add("文件位于项目之外 / Outside project: " + p); continue; }
+            CSharpIndex.Unit unit = this.index.unit(file);
             if (unit == null) errors.add("类未包含于可编译源文件索引 / Not indexed: " + p);
             else if (SettingsDetacher.isHostManaged(index, unit))
                 errors.add("不能选择原 MOD 的 Plugin、设置、配置或本地化类 / Host-managed class: " + p);
@@ -42,7 +50,7 @@ public class DependencyPlanner {
         Deque<CSharpIndex.Unit> queue = new ArrayDeque<>(initial);
         while (!queue.isEmpty() && all.size() <= 300) {
             CSharpIndex.Unit unit = queue.removeFirst();
-            for (CSharpIndex.Unit dep : index.dependencies(unit, errors)) {
+            for (CSharpIndex.Unit dep : this.index.dependencies(unit, errors)) {
                 if (SettingsDetacher.isHostManaged(index, dep)) continue;
                 if (all.add(dep)) queue.addLast(dep);
             }
@@ -50,7 +58,7 @@ public class DependencyPlanner {
             // partial 的另一个文件也可能调用其它类，必须继续遍历。
             for (String type : unit.declared()) {
                 String fq = unit.namespace().isEmpty() ? type : unit.namespace() + "." + type;
-                for (CSharpIndex.Unit part : index.sameType(fq))
+                for (CSharpIndex.Unit part : this.index.sameType(fq))
                     if (!SettingsDetacher.isHostManaged(index, part) && all.add(part)) queue.addLast(part);
             }
         }
@@ -61,7 +69,7 @@ public class DependencyPlanner {
         for (CSharpIndex.Unit unit : new ArrayList<>(all)) {
             for (String type : unit.declared()) {
                 String fq = unit.namespace().isEmpty() ? type : unit.namespace() + "." + type;
-                for (CSharpIndex.Unit part : index.sameType(fq))
+                for (CSharpIndex.Unit part : this.index.sameType(fq))
                     if (!SettingsDetacher.isHostManaged(index, part)) all.add(part);
             }
         }
@@ -100,13 +108,13 @@ public class DependencyPlanner {
             errors.add("未找到可安全调用的初始化或更新入口；请填写 Namespace.Type::Method / Lifecycle entry required");
         for (CSharpIndex.Unit u : all) {
             if (u.code().contains("Paths.ConfigPath") && (u.source().contains("\"AstralProbe\"") || u.source().contains("\"AstralProbe/")))
-                warnings.add("源码写死 AstralProbe 的配置目录，请改成每个 MOD 专属路径 / Host configuration path in " + index.root().relativize(u.file()));
+                warnings.add("源码写死 AstralProbe 的配置目录，请改成每个 MOD 专属路径 / Host configuration path in " + this.index.root().relativize(u.file()));
         }
         if (all.size() > initial.size()) warnings.add("自动包含依赖文件 " + (all.size() - initial.size()) + " 个 / Collected transitive files");
         if (all.stream().anyMatch(u -> u.source().contains("AstralParty.Modding.SDK")))
             warnings.add("引用了外部 SDK；将尝试移植源项目 ProjectReference / SDK project reference required");
         for (CSharpIndex.Unit unit : initial) {
-            for (CSharpIndex.Unit other : index.units().values()) {
+            for (CSharpIndex.Unit other : this.index.units().values()) {
                 if (all.contains(other) || !other.file().getFileName().toString().equals("HotfixWatcher.cs")) continue;
                 for (String type : unit.declared()) {
                     if (other.identifiers().contains(type)) {
@@ -143,7 +151,7 @@ public class DependencyPlanner {
                 List<Entry> found = entriesIn(List.of(unit), kind, null, null, defaults);
                 if (found.size() == 1) result.add(found.get(0));
                 else if (found.size() > 1)
-                    warnings.add(kind + " 存在多个候选方法，请指定入口 / Ambiguous methods: " + index.root().relativize(unit.file()));
+                    warnings.add(kind + " 存在多个候选方法，请指定入口 / Ambiguous methods: " + this.index.root().relativize(unit.file()));
             }
         }
         LinkedHashMap<String,Entry> unique = new LinkedHashMap<>();

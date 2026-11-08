@@ -1,0 +1,24 @@
+# Astral Mod Forge / 代码风格：每个方法独占块，结束括号单独成行。
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.java]
+indent_style = space
+indent_size = 4
+ij_java_keep_simple_methods_in_one_line = false
+ij_java_keep_simple_blocks_in_one_line = false
+ij_java_keep_simple_lambdas_in_one_line = false
+ij_java_blank_lines_around_method = 1
+ij_java_blank_lines_around_field = 0
+ij_java_class_brace_style = end_of_line
+ij_java_method_brace_style = end_of_line
+ij_java_keep_line_breaks = true
+
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2

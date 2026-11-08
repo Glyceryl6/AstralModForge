@@ -117,6 +117,7 @@ public class LocalizationTransformer {
         }
         return out.toString();
     }
+
     private Map<String,String> readOptional(Path root, String locale) throws IOException {
         for (Path path : List.of(root.resolve("localization-templates").resolve(locale + ".json"),
                 root.resolve("Resources/lang").resolve(locale + ".json"),

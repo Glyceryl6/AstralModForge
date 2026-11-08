@@ -6,7 +6,12 @@ public interface ExportObserver {
     void onEvent(String kind, String message);
 
     /** Cancellation is checked between phases and while the compiler runs. */
-    default boolean isCancelled() { return false; }
+    default boolean isCancelled() {
+        return false;
+    }
 
-    static ExportObserver silent() { return (kind, message) -> {}; }
+    static ExportObserver silent() {
+        return (kind, message) -> {
+        };
+    }
 }
