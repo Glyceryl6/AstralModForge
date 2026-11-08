@@ -182,11 +182,18 @@ public class ForgeExporter {
 
                 Files.createDirectories(outputDll.getParent());
                 Files.copy(dll, outputDll, StandardCopyOption.REPLACE_EXISTING);
-                Path sdk = dll.getParent().resolve("AstralParty.Modding.SDK.dll");
-                if (Files.isRegularFile(sdk)) {
-                    Files.copy(sdk, outputDll.getParent().resolve(sdk.getFileName()),
-                            StandardCopyOption.REPLACE_EXISTING);
-                    report.append("- 包含 SDK 依赖 DLL，请确认与其它 MOD 不冲突。\n");
+                // Ship both managed and native SDK libraries when referenced. The installer
+                // already copies every DLL in the distribution; never copy Unity proxy DLLs.
+                // 若独立 MOD 引用了 SDK Native，必须同时部署对应的原生辅助 DLL。
+                for (String library : List.of("AstralParty.Modding.SDK.dll",
+                        "AstralParty.Modding.SDK.Native.dll")) {
+                    Path sdk = dll.getParent().resolve(library);
+                    if (Files.isRegularFile(sdk)) {
+                        Files.copy(sdk, outputDll.getParent().resolve(sdk.getFileName()),
+                                StandardCopyOption.REPLACE_EXISTING);
+                        report.append("- 已包含 SDK 依赖 / Bundled SDK dependency: ")
+                                .append(library).append('\n');
+                    }
                 }
                 built = true;
                 report.append("- 编译成功 / Build succeeded: `").append(outputDll).append("`\n");

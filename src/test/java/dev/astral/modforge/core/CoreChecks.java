@@ -803,6 +803,46 @@ public final class CoreChecks {
                             "deploy copies DLL without generating sidecar default config or language files");
                 } finally { System.clearProperty("astral.modforge.dotnet"); }
             }
+            // v0.5.3: host references both managed SDK and nested SDK Native.
+            // 使用 SDK v0.10.0 双工程目录的真实结构，检查导出时不会破坏相对路径。
+            Path sdkV10 = base.resolve("AstralParty.Modding.SDK");
+            Path sdkNative = sdkV10.resolve("Native");
+            Files.createDirectories(sdkNative.resolve("build"));
+            Files.writeString(sdkV10.resolve("AstralParty.Modding.SDK.csproj"),
+                    "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net6.0</TargetFramework></PropertyGroup></Project>");
+            Files.writeString(sdkV10.resolve("Collections.cs"),
+                    "namespace AstralParty.Modding.SDK { public static class SampleCore {} }");
+            Files.writeString(sdkNative.resolve("AstralParty.Modding.SDK.Native.csproj"),
+                    "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><ProjectReference Include=\"../AstralParty.Modding.SDK.csproj\" /></ItemGroup></Project>");
+            Files.writeString(sdkNative.resolve("build/NativeInteropReferences.targets"), "<Project />");
+            Path migratedHost = base.resolve("host-v048");
+            Files.createDirectories(migratedHost.resolve("Features"));
+            Files.writeString(migratedHost.resolve("AstralProbe.csproj"),
+                    "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>"
+                            + "<ProjectReference Include=\"../AstralParty.Modding.SDK/AstralParty.Modding.SDK.csproj\" />"
+                            + "<ProjectReference Include=\"../AstralParty.Modding.SDK/Native/AstralParty.Modding.SDK.Native.csproj\" />"
+                            + "</ItemGroup></Project>");
+            Files.writeString(migratedHost.resolve("Features/Feature.cs"),
+                    "namespace Sample { class Feature { internal static void Initialize() {} } }");
+            ForgeSpec nativeReferenceExport = new ForgeSpec(migratedHost, "dev.test.nativesdk",
+                    List.of(Path.of("Features/Feature.cs")), base.resolve("native-out"),
+                    ForgeSpec.LanguageMode.INLINE, "zh_cn", "", "", false, false, null);
+            ForgeExporter.Result sdkExportResult = new ForgeExporter().export(nativeReferenceExport);
+            Path sdkCopy = sdkExportResult.directory().resolve("Dependencies/Projects/AstralParty.Modding.SDK");
+            check(Files.isRegularFile(sdkCopy.resolve("AstralParty.Modding.SDK.csproj")) &&
+                            Files.isRegularFile(sdkCopy.resolve("Native/AstralParty.Modding.SDK.Native.csproj")) &&
+                            Files.isRegularFile(sdkCopy.resolve("Native/build/NativeInteropReferences.targets")),
+                    "managed and native SDK projects copied together with targets");
+            check(Files.readString(sdkExportResult.directory().resolve("MOD.csproj")).contains(
+                            "Dependencies/Projects/AstralParty.Modding.SDK/Native/AstralParty.Modding.SDK.Native.csproj"),
+                    "exported project references nested native SDK in its original directory");
+            check(Files.readString(sdkExportResult.directory().resolve("MOD.csproj")).contains(
+                            "AdditionalProperties=\"AstralInteropDir=$(ForgeInteropDir)\""),
+                    "native SDK receives ForgeInteropDir for game proxy references");
+            check(Files.readString(sdkCopy.resolve("Native/AstralParty.Modding.SDK.Native.csproj"))
+                            .contains("../AstralParty.Modding.SDK.csproj"),
+                    "nested SDK ProjectReference still resolves after export");
+
             System.out.println("CoreChecks PASS: " + passed + " checks / 检查全部通过");
         } finally { try(Stream<Path> paths=Files.walk(base)){for(Path p:paths.sorted(Comparator.reverseOrder()).toList())Files.deleteIfExists(p);} }
     }

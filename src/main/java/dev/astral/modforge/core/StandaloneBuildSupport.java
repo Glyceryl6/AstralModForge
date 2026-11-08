@@ -168,9 +168,25 @@ public class StandaloneBuildSupport {
             }
             // An exported SDK is an independent source copy, not an absolute reference back into the host MOD.
             // 保留 SDK 工程及源码；避免生成绝对路径 ProjectReference 导致 Rider 异常或移动后失效。
-            String folder = original.getParent().getFileName().toString();
-            String relativeDir = "Dependencies/Projects/" + safeFolder(folder);
+            // The native SDK is a nested C# project that depends on the managed SDK.
+            // Copy their shared repository root once, preserving ProjectReference relative paths.
+            // 原生 SDK 是托管 SDK 的子工程，两者必须保留原本的相对目录关系。
             Path projectRoot = original.getParent();
+            boolean nativeSdk = original.getFileName().toString()
+                    .equals("AstralParty.Modding.SDK.Native.csproj")
+                    && projectRoot.getFileName().toString().equals("Native");
+            boolean managedSdk = original.getFileName().toString()
+                    .equals("AstralParty.Modding.SDK.csproj")
+                    && projectRoot.getFileName().toString().equals("AstralParty.Modding.SDK");
+            if (nativeSdk) {
+                projectRoot = projectRoot.getParent();
+                if (!projectRoot.getFileName().toString().equals("AstralParty.Modding.SDK")) {
+                    throw new IOException("SDK Native project is not next to its managed SDK: " + original);
+                }
+            }
+            String relativeDir = "Dependencies/Projects/" +
+                    (nativeSdk || managedSdk ? "AstralParty.Modding.SDK"
+                            : safeFolder(projectRoot.getFileName().toString()));
             if (!projectRoot.toRealPath().startsWith(root.getParent().toRealPath())) {
                 throw new IOException("不复制工程目录以外的源码 / ProjectReference outside workspace: " + original);
             }
@@ -191,8 +207,15 @@ public class StandaloneBuildSupport {
                     }
                 }
             }
+            String relativeProject = projectRoot.relativize(original).toString().replace('\\', '/');
             out.append("    <ProjectReference Include=\"").append(xml(relativeDir)).append('/')
-                    .append(xml(original.getFileName().toString())).append("\" />\n");
+                    .append(xml(relativeProject)).append('"');
+            if (nativeSdk) {
+                // Re-exported native dependencies use the exported project's ForgePaths.props.
+                // 保证从 Rider 打开生成工程时 Native SDK 也能找到同一份游戏代理。
+                out.append(" AdditionalProperties=\"AstralInteropDir=$(ForgeInteropDir)\"");
+            }
+            out.append(" />\n");
             notes.add("独立包含项目依赖 / Bundled referenced C# project: " + original.getFileName());
         }
     }
