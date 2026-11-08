@@ -74,18 +74,37 @@ public class DependencyPlanner {
             }
         }
 
+        Set<CSharpIndex.Unit> beforeMethodPruning = new LinkedHashSet<>(all);
+        StaticMethodPruner.Result methodPruned = new StaticMethodPruner().prune(index, all, initial, Map.of());
+        all = new LinkedHashSet<>(methodPruned.sources());
+        Set<Path> methodRemovedPaths = new LinkedHashSet<>();
+        for (CSharpIndex.Unit unit : beforeMethodPruning) {
+            if (!all.contains(unit)) {
+                methodRemovedPaths.add(unit.file());
+            }
+        }
+        if (!methodRemovedPaths.isEmpty()) {
+            warnings.add("已移除 " + methodRemovedPaths.size() + " 个未被调用的静态辅助文件 / " +
+                    "Removed " + methodRemovedPaths.size() + " unused static helper files: " +
+                    methodRemovedPaths.stream().map(index.root()::relativize).toList());
+        }
+        Map<Path, String> methodSources = new LinkedHashMap<>(methodPruned.rewrittenSources());
+        warnings.addAll(methodPruned.warnings());
+
         FrameworkPruner pruner = new FrameworkPruner();
-        // First pass prevents a discarded Framework helper from introducing unrelated settings errors.
-        FrameworkPruner.Result pruned = pruner.prune(index, all, Map.of());
+        // First pass sees method-pruned source so dead helper methods cannot pull host settings into the export.
+        FrameworkPruner.Result pruned = pruner.prune(index, all, methodSources);
         all = new LinkedHashSet<>(pruned.sources());
-        SettingsDetacher.Result settings = new SettingsDetacher().transform(index, all, spec.embedDefaultConfig());
-        // A boolean switch or a removed settings import may make further framework files unnecessary.
+        SettingsDetacher.Result settings = new SettingsDetacher().transform(
+                index, all, methodSources, spec.embedDefaultConfig());
+        // A fixed toggle or removed settings accessor may make more Framework files unnecessary.
         FrameworkPruner.Result refined = pruner.prune(index, all, settings.sources());
         if (refined.sources().size() != all.size()) {
             all = new LinkedHashSet<>(refined.sources());
-            settings = new SettingsDetacher().transform(index, all, spec.embedDefaultConfig());
+            settings = new SettingsDetacher().transform(index, all, settings.sources(), spec.embedDefaultConfig());
         }
-        Set<Path> removedPaths = new LinkedHashSet<>(pruned.removed());
+        Set<Path> removedPaths = new LinkedHashSet<>(methodRemovedPaths);
+        removedPaths.addAll(pruned.removed());
         removedPaths.addAll(refined.removed());
         if (!removedPaths.isEmpty())
             warnings.add("已跳过 " + removedPaths.size() + " 个无须打包的 Framework 文件 / Pruned unused Framework helpers: " + removedPaths);

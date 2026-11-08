@@ -19,6 +19,12 @@ public class SettingsDetacher {
     private static final Pattern CONFIG_OBJECT = Pattern.compile(
             "\\b((?:global::)?(?:[A-Za-z_]\\w*\\.)*(?:Plugin|[A-Za-z_]\\w*Configuration))\\s*\\.\\s*(\\w+)\\b");
     private static final Pattern USING = Pattern.compile("(?m)^[ \\t]*using\\s+(?:static\\s+)?([A-Za-z_][\\w.]*)\\s*;[ \\t]*(?:\\r?\\n)?");
+    private static final Pattern LAYOUT_VALUE = Pattern.compile(
+            "\\b(?:(?:global::)?(?:[A-Za-z_]\\w*\\.)*)ModSettingsLayout\\s*\\.\\s*([A-Za-z_]\\w*)\\b");
+    private static final Pattern LAYOUT_OPTION = Pattern.compile(
+            "\\b(?:F|I)\\s*\\(\\s*\"([A-Za-z_]\\w*)\"\\s*,\\s*([^,]+)");
+    private static final Pattern LAYOUT_PROPERTY = Pattern.compile(
+            "\\b(?:internal|public|private|protected)\\s+static\\s+(float|int|uint|bool|string)\\s+([A-Za-z_]\\w*)\\s*(?:=>|\\{)");
     private static final Set<String> PLUGIN_MEMBERS = Set.of("Instance", "ModLog", "SaveSettings");
 
     /** Settings and configuration source files belong to the host, not the standalone DLL. */
@@ -36,13 +42,20 @@ public class SettingsDetacher {
     }
 
     public Result transform(CSharpIndex index, Collection<CSharpIndex.Unit> sources) {
-        return transform(index, sources, false);
+        return transform(index, sources, Map.of(), false);
     }
 
     public Result transform(CSharpIndex index, Collection<CSharpIndex.Unit> sources, boolean embedDefaults) {
+        return transform(index, sources, Map.of(), embedDefaults);
+    }
+
+    public Result transform(CSharpIndex index, Collection<CSharpIndex.Unit> sources,
+                            Map<Path, String> sourceOverrides, boolean embedDefaults) {
         ConfigDefaultResolver resolver = new ConfigDefaultResolver();
         Map<String, String> propertyTypes = new HashMap<>();
         Map<String, String> propertyDefaults = new HashMap<>();
+        Map<String, String> layoutTypes = new HashMap<>();
+        Map<String, String> layoutDefaults = new HashMap<>();
         Set<String> hostNamespaces = new HashSet<>();
         Set<String> managedTypeNames = new HashSet<>();
         for (CSharpIndex.Unit unit : index.units().values()) {
@@ -51,6 +64,16 @@ public class SettingsDetacher {
                     (isUiSettings(index, unit) || index.root().relativize(unit.file()).toString().replace('\\', '/').contains("/Configuration/")))
                 hostNamespaces.add(unit.namespace());
             Map<String, String> literals = resolver.literals(unit.source());
+            if (unit.declared().contains("ModSettingsLayout")) {
+                Matcher options = LAYOUT_OPTION.matcher(unit.source());
+                while (options.find()) {
+                    layoutDefaults.put(options.group(1), options.group(2).trim());
+                }
+                Matcher properties = LAYOUT_PROPERTY.matcher(unit.code());
+                while (properties.find()) {
+                    layoutTypes.put(properties.group(2), properties.group(1));
+                }
+            }
             for (String type : unit.declared()) {
                 managedTypeNames.add(type);
                 Matcher matches = ENTRY.matcher(unit.code());
@@ -67,8 +90,9 @@ public class SettingsDetacher {
         List<String> warnings = new ArrayList<>(), errors = new ArrayList<>();
         Set<String> enabledNames = new TreeSet<>();
         Map<String, String> inlinedDefaults = new TreeMap<>();
+        Map<String, String> layoutValues = new TreeMap<>();
         for (CSharpIndex.Unit unit : sources) {
-            String code = unit.source();
+            String code = sourceOverrides.getOrDefault(unit.file(), unit.source());
             String masked = CSharpIndex.maskLiteralsAndComments(code);
             Matcher m = CONFIG_VALUE.matcher(masked);
             List<Replacement> replacements = new ArrayList<>();
@@ -105,6 +129,31 @@ public class SettingsDetacher {
                 replacements.add(new Replacement(m.start(), m.end(), replacement));
                 rewrittenMembers.add(m.start(2));
             }
+            // Host layout accessors are backed by the original MOD's mutable settings file.
+            // 独立 MOD 不携带宿主布局配置类；可识别的属性改用原项目声明的默认值。
+            Matcher layout = LAYOUT_VALUE.matcher(masked);
+            while (layout.find()) {
+                String name = layout.group(1);
+                String type = layoutTypes.get(name);
+                String value = layoutDefaults.get(name);
+                if (type == null || value == null) {
+                    errors.add("无法安全内联宿主布局设置 / Cannot inline host layout setting: ModSettingsLayout." + name +
+                            " (" + index.root().relativize(unit.file()) + ")");
+                    continue;
+                }
+                if (isWrite(masked, layout.start(), layout.end())) {
+                    errors.add("宿主布局设置被写入，不能安全导出 / Host layout setting is written: " + name);
+                    continue;
+                }
+                String replacement = layoutLiteral(type, value);
+                if (replacement == null) {
+                    errors.add("宿主布局设置默认值不是安全字面量 / Unsupported host layout default: " + name + "=" + value);
+                    continue;
+                }
+                replacements.add(new Replacement(layout.start(), layout.end(), replacement));
+                layoutValues.put(name, replacement);
+            }
+
             // No lingering ConfigEntry object may be copied, including passing a setting to a helper.
             Matcher raw = CONFIG_OBJECT.matcher(masked);
             while (raw.find()) {
@@ -143,7 +192,32 @@ public class SettingsDetacher {
                     "Boolean toggles are always enabled: " + enabledNames);
         if (!inlinedDefaults.isEmpty())
             warnings.add("已内嵌 " + inlinedDefaults.size() + " 项非布尔默认配置 / Inlined default settings: " + inlinedDefaults);
+        if (!layoutValues.isEmpty())
+            warnings.add("已将 " + layoutValues.size() + " 项宿主布局设置替换为默认值 / Host layout defaults inlined: " + layoutValues);
         return new Result(Map.copyOf(output), List.copyOf(warnings), List.copyOf(new LinkedHashSet<>(errors)));
+    }
+
+    private static String layoutLiteral(String type, String value) {
+        String literal = value.trim();
+        if ("bool".equals(type)) {
+            if ("0".equals(literal) || "0f".equalsIgnoreCase(literal)) return "false";
+            if ("1".equals(literal) || "1f".equalsIgnoreCase(literal)) return "true";
+            return null;
+        }
+        if ("uint".equals(type)) {
+            if (!literal.matches("(?:0[xX][0-9a-fA-F_]+|[0-9][0-9_]*)[uU]?") ) return null;
+            return literal.endsWith("u") || literal.endsWith("U") ? literal : literal + "u";
+        }
+        if ("int".equals(type)) {
+            return literal.matches("[+-]?(?:0[xX][0-9a-fA-F_]+|[0-9][0-9_]*)[lL]?") ? literal : null;
+        }
+        if ("float".equals(type)) {
+            return literal.matches("[+-]?(?:[0-9][0-9_]*(?:\\.[0-9_]*)?|\\.[0-9_]+)(?:[eE][+-]?[0-9_]+)?[fF]?") ? literal : null;
+        }
+        if ("string".equals(type)) {
+            return literal.startsWith("\"") && literal.endsWith("\"") ? literal : null;
+        }
+        return null;
     }
 
     /** C# allows ConfigEntry<float> A = null!, B = null! in one declaration. */
