@@ -1,88 +1,51 @@
 package dev.astral.modforge.core;
 
-import org.w3c.dom.*;
-import javax.xml.XMLConstants;
-import javax.xml.parsers.DocumentBuilderFactory;
-import java.nio.file.*;
 import java.util.*;
 
 /** Buildable standalone C# entry point + per-MOD localization. / 独立运行框架与内嵌资源模板。 */
 public class ModTemplates {
-    private static String escape(String value) {
-        return value.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;");
+    /** Compatibility entry point for callers that only need the project text. */
+    public static String csproj(ForgeSpec spec) {
+        try {
+            return csproj(spec, new StandaloneBuildSupport().plan(spec).references());
+        } catch (java.io.IOException exception) {
+            throw new IllegalArgumentException("无法生成独立 C# 工程 / Cannot generate standalone project: "
+                    + exception.getMessage(), exception);
+        }
     }
 
-    public static String csproj(ForgeSpec s) {
-        String references = sourceReferences(s.sourceRoot());
-        if (!references.contains("BepInEx.Unity.IL2CPP")) references += "    <PackageReference Include=\"BepInEx.Unity.IL2CPP\" Version=\"[6.0.0-be.789]\" IncludeAssets=\"compile\" />\n";
-        if (!references.contains("SNWCreations.Il2CppInterop.Runtime")) references += "    <PackageReference Include=\"SNWCreations.Il2CppInterop.Runtime\" Version=\"[1.5.2-snw.4]\" />\n";
-        if (!references.contains("SNWCreations.Il2CppInterop.Common")) references += "    <PackageReference Include=\"SNWCreations.Il2CppInterop.Common\" Version=\"[1.5.2-snw.4]\" />\n";
-        if (!references.contains("<PackageReference Include=\"Il2CppInterop.Runtime\"")) references += "    <PackageReference Include=\"Il2CppInterop.Runtime\" Version=\"1.5.3\" ExcludeAssets=\"all\" PrivateAssets=\"all\" />\n";
-        if (!references.contains("<PackageReference Include=\"Il2CppInterop.Common\"")) references += "    <PackageReference Include=\"Il2CppInterop.Common\" Version=\"1.5.3\" ExcludeAssets=\"all\" PrivateAssets=\"all\" />\n";
+    /** Build-time references are resolved independently of the original host project. */
+    public static String csproj(ForgeSpec spec, String references) {
+        String assembly = spec.safeName().replace("&", "&amp;").replace("<", "&lt;");
+        String id = spec.modId().replace("&", "&amp;").replace("<", "&lt;");
         return "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                "  <Import Project=\"ForgePaths.props\" Condition=\"Exists('ForgePaths.props')\" />\n" +
                 "  <PropertyGroup>\n" +
                 "    <TargetFramework>net6.0</TargetFramework>\n" +
-                "    <AssemblyName>" + escape(s.safeName()) + "</AssemblyName>\n" +
+                "    <AssemblyName>" + assembly + "</AssemblyName>\n" +
                 "    <Version>1.0.0</Version>\n" +
                 "    <LangVersion>latest</LangVersion>\n" +
                 "    <Nullable>enable</Nullable>\n" +
                 "    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n" +
                 "    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>\n" +
+                "    <DefineConstants Condition=\"Exists('$(ForgeInteropDir)/UnityEngine.ScreenCaptureModule.dll')\">$(DefineConstants);ASTRAL_HAS_SCREENSHOT</DefineConstants>\n" +
+                "    <DefineConstants Condition=\"Exists('$(ForgeInteropDir)/UnityEngine.TextRenderingModule.dll')\">$(DefineConstants);ASTRAL_HAS_TEXT_RENDERING</DefineConstants>\n" +
+                "    <!-- SDK project sources belong only to their own ProjectReference. -->\n" +
+                "    <DefaultItemExcludes>$(DefaultItemExcludes);Dependencies/Projects/**</DefaultItemExcludes>\n" +
                 "  </PropertyGroup>\n" +
                 "  <ItemGroup>\n" + references + "  </ItemGroup>\n" +
                 "  <ItemGroup>\n" +
-                "    <EmbeddedResource Include=\"lang/zh_cn.json\" LogicalName=\"" + escape(s.modId()) + ".lang.zh_cn.json\" />\n" +
-                "    <EmbeddedResource Include=\"lang/en_us.json\" LogicalName=\"" + escape(s.modId()) + ".lang.en_us.json\" />\n" +
+                "    <Compile Remove=\"Dependencies/Projects/**/*.cs\" />\n" +
+                "    <EmbeddedResource Include=\"lang/zh_cn.json\" LogicalName=\"" + id + ".lang.zh_cn.json\" />\n" +
+                "    <EmbeddedResource Include=\"lang/en_us.json\" LogicalName=\"" + id + ".lang.en_us.json\" />\n" +
                 "  </ItemGroup>\n" +
+                "  <Target Name=\"ValidateForgeInterop\" BeforeTargets=\"ResolveReferences\" Condition=\"'$(DesignTimeBuild)' != 'true'\">\n" +
+                "    <Error Condition=\"'$(ForgeInteropDir)' == ''\" Text=\"Missing IL2CPP game proxies: set ForgeInteropDir in ForgePaths.props to the game BepInEx/interop directory.\" />\n" +
+                "    <Error Condition=\"'$(ForgeInteropDir)' != '' and !Exists('$(ForgeInteropDir)/Il2Cppmscorlib.dll')\" Text=\"Missing Il2Cppmscorlib.dll in ForgeInteropDir. Run the game with BepInEx IL2CPP once.\" />\n" +
+                "    <Error Condition=\"'$(ForgeInteropDir)' != '' and !Exists('$(ForgeInteropDir)/UnityEngine.CoreModule.dll')\" Text=\"Missing UnityEngine.CoreModule.dll in ForgeInteropDir.\" />\n" +
+                "    <Error Condition=\"'$(ForgeInteropDir)' != '' and !Exists('$(ForgeInteropDir)/UnityEngine.InputLegacyModule.dll')\" Text=\"Missing UnityEngine.InputLegacyModule.dll in ForgeInteropDir.\" />\n" +
+                "  </Target>\n" +
                 "</Project>\n";
-    }
-
-    private static String sourceReferences(Path root) {
-        try {
-            Path project;
-            try (var paths = Files.list(root)) {
-                project = paths.filter(p -> p.toString().endsWith(".csproj")).findFirst().orElse(null);
-            }
-            if (project == null) return "";
-            DocumentBuilderFactory f = DocumentBuilderFactory.newInstance();
-            f.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-            f.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-            f.setFeature("http://xml.org/sax/features/external-general-entities", false);
-            f.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-            Document d = f.newDocumentBuilder().parse(project.toFile());
-            StringBuilder b = new StringBuilder();
-            NodeList packages = d.getElementsByTagName("PackageReference");
-            for (int i=0; i<packages.getLength(); i++) {
-                Element e=(Element)packages.item(i);
-                if(e.getAttribute("Include").isBlank())continue;
-                b.append("    <PackageReference");
-                for (String attribute : List.of("Include", "Version", "ExcludeAssets", "IncludeAssets", "PrivateAssets")) {
-                    if (e.hasAttribute(attribute)) b.append(' ').append(attribute).append("=\"").append(escape(e.getAttribute(attribute).replace("$(AstralBepInExIl2CppPackageVersion)", "6.0.0-be.789"))).append('"');
-                }
-                b.append(" />\n");
-            }
-            NodeList projects = d.getElementsByTagName("ProjectReference");
-            for (int i=0; i<projects.getLength(); i++) {
-                Element e=(Element)projects.item(i);
-                String relative=e.getAttribute("Include");
-                if(relative.contains("$(") || relative.isEmpty())continue;
-                Path p=root.resolve(relative.replace('\\','/')).toAbsolutePath().normalize();
-                if(Files.isRegularFile(p)) b.append("    <ProjectReference Include=\"").append(escape(p.toString())).append("\" />\n");
-            }
-            NodeList refs = d.getElementsByTagName("Reference");
-            for (int i=0; i<refs.getLength(); i++) {
-                Element e=(Element)refs.item(i);
-                String include=e.getAttribute("Include");
-                NodeList hints=e.getElementsByTagName("HintPath");
-                if(include.isBlank() || hints.getLength()==0)continue;
-                String hint=hints.item(0).getTextContent();
-                if(hint.contains("$("))continue;
-                Path resolved=root.resolve(hint.replace('\\','/')).toAbsolutePath().normalize();
-                if(Files.isRegularFile(resolved)) b.append("    <Reference Include=\"").append(escape(include)).append("\"><HintPath>")
-                        .append(escape(resolved.toString())).append("</HintPath></Reference>\n");
-            }
-            return b.toString();
-        } catch (Exception ignored) { return ""; }
     }
 
     public static String plugin(ForgeSpec spec, String namespace, List<DependencyPlanner.Entry> loads,
@@ -94,7 +57,7 @@ public class ModTemplates {
             if (!entry.isStatic()) instances.putIfAbsent(entry.type(), "_component" + instances.size());
         boolean needsTicker = !updates.isEmpty() ||
                 (spec.languageMode() == ForgeSpec.LanguageMode.EMBEDDED && !spec.embedDefaultConfig());
-        StringBuilder code = new StringBuilder("// Generated by Astral Mod Forge 0.3.0 / 请检查启动调用顺序。\n" +
+        StringBuilder code = new StringBuilder("// Generated by Astral Mod Forge 0.5.1 / 请检查启动调用顺序。\n" +
                 "using System;\nusing BepInEx;\nusing BepInEx.Configuration;\nusing BepInEx.Logging;\n" +
                 "using BepInEx.Unity.IL2CPP;\nusing UnityEngine;\n\n" +
                 "namespace " + namespace + " {\n" +
