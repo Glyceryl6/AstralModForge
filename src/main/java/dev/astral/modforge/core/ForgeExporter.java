@@ -24,8 +24,10 @@ public class ForgeExporter {
     /** Work is staged outside the C# workspace when source export is disabled. */
     public Result export(ForgeSpec spec, ExportObserver observer) throws Exception {
         Objects.requireNonNull(observer, "observer");
-        if (!Files.isDirectory(spec.sourceRoot())) throw new IOException("原工程目录不存在 / Source project missing");
-        observer.onEvent("phase", "检查依赖 / Resolving dependencies");
+        if (!Files.isDirectory(spec.sourceRoot())) {
+            throw new IOException(ForgeText.select("原工程目录不存在 / Source project missing", observer.language()));
+        }
+        emit(observer, "phase", "检查依赖 / Resolving dependencies");
         CSharpIndex index = new CSharpIndex(spec.sourceRoot());
         DependencyPlanner.Plan plan = new DependencyPlanner(index).plan(spec);
         LocalizationTransformer.Result locale = new LocalizationTransformer().transform(
@@ -37,9 +39,15 @@ public class ForgeExporter {
             while (m.find()) if (!LANGUAGE_METHODS.contains(m.group(1)))
                 errors.add("翻译桥接不支持该成员 / Unsupported localization member: " + m.group(0));
         }
-        if (!errors.isEmpty()) throw new IOException("预检查失败 / Preflight failed:\n- " +
-                String.join("\n- ", new LinkedHashSet<>(errors)));
-        if (observer.isCancelled()) throw new IOException("用户取消导出 / Export cancelled");
+        if (!errors.isEmpty()) {
+            String heading = ForgeText.select("预检查失败 / Preflight failed", observer.language());
+            List<String> localized = errors.stream()
+                    .map(error -> ForgeText.select(error, observer.language())).distinct().toList();
+            throw new IOException(heading + ":\n- " + String.join("\n- ", localized));
+        }
+        if (observer.isCancelled()) {
+            throw new IOException(ForgeText.select("用户取消导出 / Export cancelled", observer.language()));
+        }
 
         String namespace = sourceNamespace(spec.sourceRoot());
         Path projects = spec.destination().resolve("Exports");
@@ -78,7 +86,7 @@ public class ForgeExporter {
         Path outputDll = target.resolve("dist/" + spec.safeName() + ".dll");
         boolean built = false, deployed = false;
         try {
-            observer.onEvent("phase", "生成独立工程 / Generating standalone project");
+            emit(observer, "phase", "生成独立工程 / Generating standalone project");
             write(stage, "MOD.csproj", ModTemplates.csproj(spec));
             write(stage, "Plugin.cs", ModTemplates.plugin(spec, namespace, plan.loads(), plan.updates()));
             write(stage, "ModLocalization.cs", ModTemplates.localization(spec, namespace));
@@ -106,11 +114,11 @@ public class ForgeExporter {
             write(target, "export-manifest.properties", manifest.toString());
             if (observer.isCancelled()) throw new IOException("用户取消导出 / Export cancelled");
             if (spec.build()) {
-                observer.onEvent("phase", "开始编译 / Running dotnet build");
+                emit(observer, "phase", "开始编译 / Running dotnet build");
                 if (!commandAvailable(dotnetCommand())) {
                     report.append("- 未发现 dotnet SDK，未编译 DLL / dotnet SDK unavailable.\n");
                     notes.add("未安装 dotnet SDK / dotnet unavailable");
-                    observer.onEvent("log", "dotnet SDK unavailable; no DLL produced");
+                    emit(observer, "warning", "未找到 dotnet SDK，未生成 DLL / dotnet SDK unavailable; no DLL produced");
                 } else {
                     ProcessBuilder pb = new ProcessBuilder(dotnetCommand(), "build", stage.resolve("MOD.csproj").toString(),
                             "-c", "Release", "--nologo", "-v", "minimal");
@@ -125,7 +133,9 @@ public class ForgeExporter {
                                 log.write(line); log.newLine(); log.flush();
                                 observer.onEvent("log", line);
                             }
-                        } catch (IOException ex) { observer.onEvent("log", "Build output error: " + ex.getMessage()); }
+                        } catch (IOException ex) {
+                            emit(observer, "warning", "构建日志读取失败 / Build output error: " + ex.getMessage());
+                        }
                     });
                     boolean finished = false, cancelled = false, timedOut = false;
                     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(300);
@@ -138,7 +148,9 @@ public class ForgeExporter {
                         process.waitFor(5, TimeUnit.SECONDS);
                     }
                     reader.join(2000);
-                    if (cancelled) throw new IOException("用户取消编译 / Build cancelled");
+                    if (cancelled) {
+                        throw new IOException(ForgeText.select("用户取消编译 / Build cancelled", observer.language()));
+                    }
                     Path dll = stage.resolve("bin/Release/net6.0/" + spec.safeName() + ".dll");
                     if (timedOut) report.append("- 编译超时（300 秒），查看 build.log / Build timeout.\n");
                     else if (process.exitValue() != 0) report.append("- 编译失败，退出码 ")
@@ -158,7 +170,7 @@ public class ForgeExporter {
                 }
             } else report.append("- 已导出源码，未执行编译 / Source-only export.\n");
             if (built && spec.copyToGame()) {
-                observer.onEvent("phase", "复制到游戏 / Deploying DLL");
+                emit(observer, "phase", "复制到游戏 / Deploying DLL");
                 StringBuilder reason = new StringBuilder();
                 if (!GameInstaller.valid(spec.gameRoot(), reason)) {
                     report.append("- 游戏目录无效，已保留在 dist：").append(reason).append("\n");
@@ -170,16 +182,19 @@ public class ForgeExporter {
                 }
             } else if (spec.copyToGame()) report.append("- 无 DLL，未复制游戏目录 / No DLL, deployment skipped.\n");
             write(target, "export-report.md", report.toString());
-            observer.onEvent("phase", built ? "编译完成 / Build complete" : "导出结束 / Export finished");
+            emit(observer, "phase", built ? "编译完成 / Build complete" : "导出结束 / Export finished");
             return new Result(target, target.resolve("export-report.md"), built ? outputDll : null,
                     built, deployed, List.copyOf(notes));
         } catch (Exception ex) {
             write(target, "export-report.md", report.append("\n## 错误 / Error\n\n").append(ex).append('\n').toString());
-            observer.onEvent("log", "Export failed: " + ex.getMessage());
             throw ex;
         } finally {
             if (!spec.exportSource()) deleteTree(stage);
         }
+    }
+
+    private static void emit(ExportObserver observer, String kind, String message) {
+        observer.onEvent(kind, ForgeText.select(message, observer.language()));
     }
 
     private static void deleteTree(Path root) throws IOException {

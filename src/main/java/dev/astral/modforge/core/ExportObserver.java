@@ -10,6 +10,11 @@ public interface ExportObserver {
         return false;
     }
 
+    /** Language used for Forge-generated diagnostics; compiler output is passed through unchanged. */
+    default String language() {
+        return ForgeText.systemLanguage();
+    }
+
     static ExportObserver silent() {
         return (kind, message) -> {
         };

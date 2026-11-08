@@ -14,6 +14,7 @@ import com.intellij.openapi.wm.ToolWindowManager;
 import dev.astral.modforge.core.ExportObserver;
 import dev.astral.modforge.core.ForgeExporter;
 import dev.astral.modforge.core.ForgeSpec;
+import dev.astral.modforge.core.ForgeText;
 import org.jetbrains.annotations.NotNull;
 
 import java.nio.file.Path;
@@ -50,7 +51,7 @@ public class ExportModAction extends AnAction {
         try {
             spec = dialog.toSpec();
         } catch (Exception exception) {
-            Messages.showErrorDialog(project, exception.getMessage(), I18n.get("export.title"));
+            Messages.showErrorDialog(project, ForgeText.select(exception.getMessage(), I18n.language()), I18n.get("export.title"));
             return;
         }
 
@@ -103,19 +104,24 @@ public class ExportModAction extends AnAction {
                         public boolean isCancelled() {
                             return indicator.isCanceled();
                         }
+
+                        @Override
+                        public String language() {
+                            return I18n.language();
+                        }
                     });
                 } catch (Exception exception) {
                     this.failure = exception;
                     String message = exception.getMessage() == null
                             ? exception.toString() : exception.getMessage();
-                    console.event("error", message);
+                    console.event("error", ForgeText.select(message, I18n.language()));
                 }
             }
 
             @Override
             public void onSuccess() {
                 if (this.failure != null) {
-                    Messages.showErrorDialog(project, I18n.get("failed") + this.failure.getMessage(),
+                    Messages.showErrorDialog(project, I18n.get("failed") + ForgeText.select(this.failure.getMessage(), I18n.language()),
                             I18n.get("export.title"));
                     return;
                 }

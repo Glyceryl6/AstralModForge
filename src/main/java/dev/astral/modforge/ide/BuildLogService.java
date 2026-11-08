@@ -68,7 +68,7 @@ public class BuildLogService {
             this.phase = message;
         }
 
-        String text = ("phase".equals(kind) ? "\n[STEP] " : "") + message + "\n";
+        String text = ("phase".equals(kind) ? "\n" + I18n.get("console.step") + " " : "") + message + "\n";
         this.history.append(text);
         // 内存预览设上限；完整 dotnet 构建输出保留在 build.log。
         if (this.history.length() > 1_000_000) {

@@ -6,6 +6,7 @@ import com.intellij.openapi.ui.Messages;
 import dev.astral.modforge.core.CSharpIndex;
 import dev.astral.modforge.core.DependencyPlanner;
 import dev.astral.modforge.core.ForgeSpec;
+import dev.astral.modforge.core.ForgeText;
 import dev.astral.modforge.core.LocalizationTransformer;
 import org.jetbrains.annotations.Nullable;
 
@@ -57,7 +58,7 @@ class ExportDialog extends DialogWrapper {
         try {
             this.fileTree = new ClassSelectionTree(new CSharpIndex(this.root), preselected);
         } catch (Exception exception) {
-            this.indexError = exception.getMessage();
+            this.indexError = ForgeText.select(exception.getMessage(), I18n.language());
         }
 
         this.build.addActionListener(event -> {
@@ -180,19 +181,19 @@ class ExportDialog extends DialogWrapper {
                     I18n.get("analyze.files", plan.sources().size()) + "\n");
 
             for (String warning : this.fileTree.warnings()) {
-                summary.append("[!] ").append(warning).append('\n');
+                summary.append("[!] ").append(ForgeText.select(warning, I18n.language())).append('\n');
             }
             for (String warning : plan.warnings()) {
-                summary.append("[!] ").append(warning).append('\n');
+                summary.append("[!] ").append(ForgeText.select(warning, I18n.language())).append('\n');
             }
             for (String warning : locale.warnings()) {
-                summary.append("[!] ").append(warning).append('\n');
+                summary.append("[!] ").append(ForgeText.select(warning, I18n.language())).append('\n');
             }
             for (String error : plan.errors()) {
-                summary.append("[X] ").append(error).append('\n');
+                summary.append("[X] ").append(ForgeText.select(error, I18n.language())).append('\n');
             }
             for (String error : locale.errors()) {
-                summary.append("[X] ").append(error).append('\n');
+                summary.append("[X] ").append(ForgeText.select(error, I18n.language())).append('\n');
             }
 
             JTextArea text = new JTextArea(summary.toString(), 18, 65);
@@ -201,7 +202,7 @@ class ExportDialog extends DialogWrapper {
             JOptionPane.showMessageDialog(null, new JScrollPane(text),
                     I18n.get("analyze.title"), JOptionPane.INFORMATION_MESSAGE);
         } catch (Exception exception) {
-            Messages.showErrorDialog(exception.getMessage(), I18n.get("analyze.title"));
+            Messages.showErrorDialog(ForgeText.select(exception.getMessage(), I18n.language()), I18n.get("analyze.title"));
         }
     }
 }

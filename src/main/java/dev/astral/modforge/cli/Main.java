@@ -2,6 +2,7 @@ package dev.astral.modforge.cli;
 
 import dev.astral.modforge.core.ForgeExporter;
 import dev.astral.modforge.core.ForgeSpec;
+import dev.astral.modforge.core.ForgeText;
 
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -15,7 +16,8 @@ public class Main {
         try {
             System.exit(run(args));
         } catch (Exception exception) {
-            System.err.println("ERROR / 错误:\n" + exception.getMessage());
+            System.err.println(ForgeText.select("错误 / ERROR", ForgeText.systemLanguage()) + ":\n" +
+                    ForgeText.select(exception.getMessage(), ForgeText.systemLanguage()));
             System.exit(2);
         }
     }
@@ -45,7 +47,7 @@ public class Main {
         ForgeExporter exporter = new ForgeExporter();
         if (args[0].equals("new")) {
             ForgeExporter.Result result = exporter.createEmpty(root, id);
-            System.out.println("New MOD / 新建: " + result.directory());
+            System.out.println(ForgeText.select("新建 MOD / New MOD", ForgeText.systemLanguage()) + ": " + result.directory());
             return 0;
         }
         if (!args[0].equals("export")) {
@@ -68,15 +70,15 @@ public class Main {
                 options.containsKey("export-source"), options.containsKey("embed-default-config"));
 
         ForgeExporter.Result result = exporter.export(spec);
-        System.out.println("Project / 工程: " + result.directory());
-        System.out.println("Report / 报告: " + result.report());
+        System.out.println(ForgeText.select("工程 / Project", ForgeText.systemLanguage()) + ": " + result.directory());
+        System.out.println(ForgeText.select("报告 / Report", ForgeText.systemLanguage()) + ": " + result.report());
         if (result.dll() != null) {
             System.out.println("DLL: " + result.dll());
         } else {
-            System.out.println("No DLL built / 未生成 DLL");
+            System.out.println(ForgeText.select("未生成 DLL / No DLL built", ForgeText.systemLanguage()));
         }
         if (result.deployed()) {
-            System.out.println("Copied to game / 已复制到游戏");
+            System.out.println(ForgeText.select("已复制到游戏 / Copied to game", ForgeText.systemLanguage()));
         }
         return spec.build() && !result.compiled() ? 1 : 0;
     }

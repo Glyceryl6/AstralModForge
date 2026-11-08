@@ -10,4 +10,8 @@ class I18n {
     static String get(String key, Object... args) {
         return BUNDLE.getMessage(key, args);
     }
+
+    static String language() {
+        return DynamicBundle.getLocale().getLanguage();
+    }
 }
