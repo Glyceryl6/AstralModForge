@@ -17,6 +17,17 @@ public class LocalizationTransformer {
     private static final Pattern ANY_CALL = Pattern.compile(
             "\\b(?:ModLanguageService|ModLocalization)\\s*\\.\\s*(?:Translate|T)\\s*\\(");
     private static final Pattern BARE_KEY = Pattern.compile("\"(astralprobe\\.[a-zA-Z0-9_.-]+)\"");
+    private static final Pattern PREFIX_CALL = Pattern.compile(
+            "^\\s*\"(astralprobe\\.[a-zA-Z0-9_.-]+\\.)\"\\s*\\+.*", Pattern.DOTALL);
+    private static final Pattern MEMBER_KEY = Pattern.compile(
+            "^\\s*(?:[A-Za-z_][\\w]*\\.)+[A-Za-z_][\\w]*Key\\s*$");
+    private static final Pattern CHOICE_KEY = Pattern.compile(
+            "\\bnew(?:\\s+[A-Za-z_][\\w]*)?\\s*\\([^;{}]*?\"(astralprobe\\.[a-zA-Z0-9_.-]+)\"",
+            Pattern.DOTALL);
+    private static final Pattern SIMPLE_IDENTIFIER = Pattern.compile("^[A-Za-z_][\\w]*$");
+    private static final Pattern CONST_STRING = Pattern.compile(
+            "\\b(?:const\\s+)?(?:readonly\\s+)?(?:string|var)\\s+%s\\s*=\\s*\"(astralprobe\\.[a-zA-Z0-9_.-]+)\"");
+
     public record Result(Map<Path,String> sources, Map<String,String> zh, Map<String,String> en,
                          List<String> warnings, List<String> errors) {}
 
@@ -32,7 +43,9 @@ public class LocalizationTransformer {
         Map<String,String> newEn = new TreeMap<>();
         Map<Path,String> transformed = new LinkedHashMap<>();
         List<String> warnings = new ArrayList<>(), errors = new ArrayList<>();
-        boolean dynamic = false;
+        // Explicit dynamic keys live in the source project, never in a global dictionary.
+        // 手工声明的动态键只在原项目读取，避免导出所有模块的翻译。
+        Set<String> declared = readDeclaredKeys(projectRoot, oldZh, oldEn, errors);
         for (CSharpIndex.Unit unit : units) {
             String source = sourceOverrides.getOrDefault(unit.file(), unit.source());
             String masked = CSharpIndex.maskLiteralsAndComments(source);
@@ -67,11 +80,33 @@ public class LocalizationTransformer {
             Matcher any = ANY_CALL.matcher(source);
             while (any.find()) {
                 if ((!masked.startsWith("ModLanguageService", any.start()) &&
-                     !masked.startsWith("ModLocalization", any.start())) || resolved.contains(any.start())) continue;
-                dynamic = true;
-                if (spec.languageMode() == ForgeSpec.LanguageMode.INLINE)
-                    errors.add("动态或不支持的翻译调用，不能安全替换为硬编码 / Dynamic translation: " +
-                            projectRoot.relativize(unit.file()) + " @ " + any.start());
+                     !masked.startsWith("ModLocalization", any.start())) || resolved.contains(any.start())) {
+                    continue;
+                }
+
+                String expression = callArgument(source, any.end());
+                String location = projectRoot.relativize(unit.file()) + " @ " + any.start();
+                if (spec.languageMode() == ForgeSpec.LanguageMode.INLINE) {
+                    errors.add("动态或不支持的翻译调用，不能安全替换为硬编码 / Dynamic translation: " + location);
+                    continue;
+                }
+
+                Set<String> inferred = inferDynamicKeys(expression, source, oldZh.keySet(), declared);
+                if (inferred.isEmpty()) {
+                    errors.add("无法确定动态翻译键；请在 localization-keys.txt 中明确列出键或前缀 / "
+                            + "Unresolved dynamic localization (declare keys in localization-keys.txt): " + location);
+                    continue;
+                }
+
+                for (String key : inferred) {
+                    if (oldZh.containsKey(key) && oldEn.containsKey(key)) {
+                        // Keep the original keys: dynamically generated expressions cannot be rewritten safely.
+                        newZh.put(key, oldZh.get(key));
+                        newEn.put(key, oldEn.get(key));
+                    }
+                }
+                warnings.add("动态翻译仅收集可追踪的键 / Scoped dynamic keys (" + inferred.size()
+                        + "): " + location);
             }
             Matcher bare = BARE_KEY.matcher(source);
             while (bare.find()) {
@@ -89,13 +124,116 @@ public class LocalizationTransformer {
             }
             transformed.put(unit.file(), buf.toString());
         }
-        if (dynamic && spec.languageMode() == ForgeSpec.LanguageMode.EMBEDDED) {
-            warnings.add("存在动态翻译键，内嵌了全部原始键并保留原键名 / Dynamic keys: bundled full dictionaries");
-            newZh.putAll(oldZh); newEn.putAll(oldEn);
-        }
         if (spec.languageMode() == ForgeSpec.LanguageMode.INLINE)
             warnings.add("本次语言已固定为 " + spec.locale() + "，运行时无法切换文本 / Fixed locale inlined");
         return new Result(transformed, newZh, newEn, warnings, errors);
+    }
+
+    /**
+     * Reads explicitly documented keys for calls whose runtime arguments cannot be resolved.
+     * 每行一个键或带 * 的前缀；不允许静默回退为完整宿主词典。
+     */
+    private static Set<String> readDeclaredKeys(Path root, Map<String,String> zh,
+                                                Map<String,String> en, List<String> errors) throws IOException {
+        Path manifest = root.resolve("localization-keys.txt");
+        if (!Files.isRegularFile(manifest)) {
+            return Set.of();
+        }
+
+        Set<String> keys = new TreeSet<>();
+        for (String raw : Files.readAllLines(manifest, StandardCharsets.UTF_8)) {
+            String line = raw.trim();
+            if (line.isEmpty() || line.startsWith("#")) {
+                continue;
+            }
+
+            if (line.endsWith(".*")) {
+                String prefix = line.substring(0, line.length() - 1);
+                for (String key : zh.keySet()) {
+                    if (key.startsWith(prefix)) {
+                        keys.add(key);
+                    }
+                }
+            } else {
+                keys.add(line);
+            }
+        }
+        for (String key : keys) {
+            if (!zh.containsKey(key) || !en.containsKey(key)) {
+                errors.add("动态翻译清单中的键缺失 / Key missing from language manifest: " + key);
+            }
+        }
+        return keys;
+    }
+
+    private static String callArgument(String source, int position) {
+        int depth = 1;
+        boolean quoted = false;
+        boolean escaped = false;
+        for (int i = position; i < source.length(); i++) {
+            char c = source.charAt(i);
+            if (quoted) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '\"') {
+                    quoted = false;
+                }
+            } else if (c == '\"') {
+                quoted = true;
+            } else if (c == '(') {
+                depth++;
+            } else if (c == ')' && --depth == 0) {
+                return source.substring(position, i).trim();
+            }
+        }
+        return "";
+    }
+
+    private static Set<String> inferDynamicKeys(String expression, String source,
+                                                 Set<String> dictionaryKeys, Set<String> declared) {
+        Set<String> inferred = new TreeSet<>();
+        if (expression == null || expression.isBlank()) {
+            return inferred;
+        }
+        Matcher prefix = PREFIX_CALL.matcher(expression);
+        if (prefix.matches() && prefix.group(1).length() > "astralprobe.".length()) {
+            for (String key : dictionaryKeys) {
+                if (key.startsWith(prefix.group(1))) {
+                    inferred.add(key);
+                }
+            }
+            return inferred;
+        }
+        // E.g. Translate(choice.NameKey) and literal keys stored in the same MarkChoice[] table.
+        // 只接受源文件自身的 Key 字段与字面量候选项，避免把整个词典当作依赖。
+        if (MEMBER_KEY.matcher(expression).matches()) {
+            Matcher m = CHOICE_KEY.matcher(source);
+            while (m.find()) {
+                if (dictionaryKeys.contains(m.group(1))) {
+                    inferred.add(m.group(1));
+                }
+            }
+            if (!inferred.isEmpty()) {
+                return inferred;
+            }
+        }
+        if (SIMPLE_IDENTIFIER.matcher(expression).matches()) {
+            Pattern assigned = Pattern.compile(String.format(CONST_STRING.pattern(),
+                    Pattern.quote(expression)));
+            Matcher m = assigned.matcher(source);
+            while (m.find()) {
+                if (dictionaryKeys.contains(m.group(1))) {
+                    inferred.add(m.group(1));
+                }
+            }
+            if (!inferred.isEmpty()) {
+                return inferred;
+            }
+        }
+        // Explicit manifest is an opt-in escape hatch for reflection or runtime-computed keys.
+        return new TreeSet<>(declared);
     }
 
     private static String unescapeCSharp(String key) {
