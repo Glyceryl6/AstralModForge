@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>dev.astral.modforge</id>
     <name>Astral Mod Forge</name>
-    <version>0.4.0</version>
+    <version>0.5.0</version>
     <idea-version since-build="252"/>
     <vendor>Astral Mod Forge Community</vendor>
     <description><![CDATA[
