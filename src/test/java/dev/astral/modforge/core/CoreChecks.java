@@ -843,6 +843,42 @@ public final class CoreChecks {
                             .contains("../AstralParty.Modding.SDK.csproj"),
                     "nested SDK ProjectReference still resolves after export");
 
+            // v0.5.4: Native is now a source package inside one unified SDK project.
+            // 单程序集 SDK 必须把游戏代理路径传给根项目，且不能要求旧 Native.csproj。
+            Path sdkV11 = base.resolve("unified/AstralParty.Modding.SDK");
+            Files.createDirectories(sdkV11.resolve("Native/Interop"));
+            Files.createDirectories(sdkV11.resolve("build"));
+            Files.writeString(sdkV11.resolve("AstralParty.Modding.SDK.csproj"),
+                    "<Project Sdk=\"Microsoft.NET.Sdk\"><Import Project=\"build/NativeInteropReferences.targets\" /></Project>");
+            Files.writeString(sdkV11.resolve("Native/Interop/Utility.cs"),
+                    "namespace AstralParty.Modding.SDK.Native.Interop { public static class Utility {} }");
+            Files.writeString(sdkV11.resolve("build/NativeInteropReferences.targets"), "<Project />");
+            Path unifiedHost = base.resolve("unified/AstralProbe");
+            Files.createDirectories(unifiedHost.resolve("Features"));
+            Files.writeString(unifiedHost.resolve("AstralProbe.csproj"),
+                    "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>"
+                            + "<ProjectReference Include=\"../AstralParty.Modding.SDK/AstralParty.Modding.SDK.csproj\" Condition=\"'$(AstralInteropDir)' != ''\" />"
+                            + "<ProjectReference Include=\"../AstralParty.Modding.SDK/AstralParty.Modding.SDK.csproj\" Condition=\"'$(AstralInteropDir)' == ''\" />"
+                            + "</ItemGroup></Project>");
+            Files.writeString(unifiedHost.resolve("Features/Feature.cs"),
+                    "namespace Sample { class Feature { internal static void Initialize() {} } }");
+            ForgeSpec unifiedSpec = new ForgeSpec(unifiedHost, "dev.test.unifiedsdk",
+                    List.of(Path.of("Features/Feature.cs")), base.resolve("unified-out"),
+                    ForgeSpec.LanguageMode.INLINE, "zh_cn", "", "", false, false, null);
+            ForgeExporter.Result unifiedResult = new ForgeExporter().export(unifiedSpec);
+            Path unifiedCopy = unifiedResult.directory().resolve("Dependencies/Projects/AstralParty.Modding.SDK");
+            check(Files.isRegularFile(unifiedCopy.resolve("Native/Interop/Utility.cs"))
+                            && Files.isRegularFile(unifiedCopy.resolve("build/NativeInteropReferences.targets")),
+                    "unified SDK helper sources and MSBuild targets copied");
+            check(!Files.exists(unifiedCopy.resolve("Native/AstralParty.Modding.SDK.Native.csproj")),
+                    "unified SDK no longer requires a separate Native project");
+            check(Files.readString(unifiedResult.directory().resolve("MOD.csproj"))
+                            .contains("AdditionalProperties=\"AstralInteropDir=$(ForgeInteropDir)\""),
+                    "unified SDK receives ForgeInteropDir through ProjectReference");
+            String outputProject = Files.readString(unifiedResult.directory().resolve("MOD.csproj"));
+            check(outputProject.split("Dependencies/Projects/AstralParty.Modding.SDK/AstralParty.Modding.SDK.csproj", -1).length == 2,
+                    "conditional duplicate project references are emitted only once");
+
             System.out.println("CoreChecks PASS: " + passed + " checks / 检查全部通过");
         } finally { try(Stream<Path> paths=Files.walk(base)){for(Path p:paths.sorted(Comparator.reverseOrder()).toList())Files.deleteIfExists(p);} }
     }

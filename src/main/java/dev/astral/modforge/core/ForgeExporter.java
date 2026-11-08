@@ -55,7 +55,7 @@ public class ForgeExporter {
         Path target = unusedDirectory(projects, spec.safeName());
         Files.createDirectories(target);
         Path stage = spec.exportSource() ? target : Files.createTempDirectory("astral-mod-forge-build-");
-        StringBuilder report = new StringBuilder("# Astral Mod Forge v0.5.3 导出报告 / Export report\n\n" +
+        StringBuilder report = new StringBuilder("# Astral Mod Forge v0.5.4 导出报告 / Export report\n\n" +
                 "MOD ID: `" + spec.modId() + "`\n" +
                 "源工程 / Source: `" + spec.sourceRoot() + "`\n" +
                 "输出目录 / Output: `" + target + "`\n" +
@@ -123,7 +123,7 @@ public class ForgeExporter {
                         "独立导出工程。检查 export-report.md 以及 ForgePaths.props 中的 ForgeInteropDir；运行 `dotnet restore --configfile NuGet.Config`、`dotnet build --no-restore -c Release`。\n\n" +
                         "Check export-report.md and ForgePaths.props. Restore with NuGet.Config, then build.\n");
             }
-            StringBuilder manifest = new StringBuilder("# Astral Mod Forge v0.5.3 / 导出清单\n" +
+            StringBuilder manifest = new StringBuilder("# Astral Mod Forge v0.5.4 / 导出清单\n" +
                     "id=" + spec.modId() + "\n" + "language=" + spec.languageMode() + "\n" +
                     "locale=" + spec.locale() + "\n" + "source=" + spec.exportSource() + "\n" +
                     "embeddedDefaults=" + spec.embedDefaultConfig() + "\n" +
