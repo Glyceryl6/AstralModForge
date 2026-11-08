@@ -44,6 +44,10 @@ public final class CoreChecks {
             CSharpIndex index=new CSharpIndex(src);
             check(!index.units().containsKey(src.resolve("Features/Ignore.cs")),"msbuild compile excludes");
             check(CSharpIndex.maskLiteralsAndComments("// Beta\nvar q=\"Beta\"; Beta f;").contains("Beta f;"),"safe lexing");
+            check(ForgeText.select("检查依赖 / Resolving dependencies", "zh_CN").equals("检查依赖"),
+                    "Chinese export log language");
+            check(ForgeText.select("检查依赖 / Resolving dependencies", "en_US").equals("Resolving dependencies"),
+                    "English export log language");
             ForgeSpec embed=new ForgeSpec(src,"dev.test.alpha",List.of(Path.of("Features/Alpha.cs")),base.resolve("out"),
                     ForgeSpec.LanguageMode.EMBEDDED,"zh_cn","","",false,false,null);
             DependencyPlanner.Plan plan=new DependencyPlanner(index).plan(embed);
@@ -76,12 +80,142 @@ public final class CoreChecks {
                   pluginCode.contains("_component1.Tick(Time.realtimeSinceStartup)"),"multiple generated Update calls");
             check(pluginCode.contains(".Initialize();"),"generated Load for selected class");
             check(Files.isRegularFile(multiple.directory().resolve("export-manifest.properties")), "reproducible export manifest");
+            // v0.5.0: method-level dependency pruning keeps only the static helper call chain.
+            Path methodSrc = base.resolve("method-source");
+            Files.createDirectories(methodSrc.resolve("Features"));
+            Files.createDirectories(methodSrc.resolve("Framework/Interop"));
+            Files.createDirectories(methodSrc.resolve("Framework/UI"));
+            Files.createDirectories(methodSrc.resolve("Framework/Settings"));
+            Files.writeString(methodSrc.resolve("Source.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net6.0</TargetFramework></PropertyGroup></Project>");
+            Files.writeString(methodSrc.resolve("Plugin.cs"), "namespace MethodSample { public class Plugin {} }");
+            Files.writeString(methodSrc.resolve("Framework/Settings/ModSettingsLayout.cs"), """
+                    namespace MethodSample.Framework.Settings {
+                      internal static class ModSettingsLayout {
+                        private static readonly int[] Options = {
+                          I("HomeTextColor", 16761384, 0, 16777215),
+                          I("ActionButtonFontSize", 20, 8, 48)
+                        };
+                        private static int I(string key, int value, int min, int max) => value;
+                        private static float Number(string key) => 0;
+                        internal static uint HomeTextColor => (uint)Number(nameof(HomeTextColor));
+                        internal static int ActionButtonFontSize => (int)Number(nameof(ActionButtonFontSize));
+                      }
+                    }
+                    """);
+            Files.writeString(methodSrc.resolve("Features/MarksService.cs"), """
+                    using MethodSample.Framework.Interop;
+                    using MethodSample.Framework.Settings;
+                    namespace MethodSample.Features {
+                      internal sealed class MarksService {
+                        internal void Initialize() {
+                          NativeActionButton.StretchNativeArtwork();
+                          uint color = ModSettingsLayout.HomeTextColor;
+                          OpaqueStaticHelper.Used();
+                        }
+                      }
+                    }
+                    """);
+            Files.writeString(methodSrc.resolve("Framework/Interop/NativeActionButton.cs"), """
+                    using MethodSample.Framework.Settings;
+                    using MethodSample.Framework.UI;
+                    using static MethodSample.Framework.UI.StableNativeAction;
+                    using ActionTools = MethodSample.Framework.UI.StableNativeAction;
+                    namespace MethodSample.Framework.Interop {
+                      internal static class NativeActionButton {
+                        internal static void StretchNativeArtwork() {
+                          Scale();
+                          ActionTools.Scale();
+                        }
+                        internal static void Create() {
+                          NativeColor color = new NativeColor();
+                          int size = ModSettingsLayout.ActionButtonFontSize;
+                          StableNativeAction.Prepare();
+                        }
+                        private struct NativeColor { internal int Value; }
+                      }
+                    }
+                    """);
+            Files.writeString(methodSrc.resolve("Framework/UI/StableNativeAction.cs"), """
+                    namespace MethodSample.Framework.UI {
+                      internal static class StableNativeAction {
+                        internal static void Scale() { }
+                        internal static void Prepare() { NativeMailActionButton.DetachSizeGears(); }
+                      }
+                    }
+                    """);
+            Files.writeString(methodSrc.resolve("Framework/UI/OpaqueStaticHelper.cs"), """
+                    namespace MethodSample.Framework.UI {
+                      internal static class OpaqueStaticHelper {
+                        private static readonly int State = new System.Random().Next();
+                        internal static void Used() { int state = State; }
+                        internal static void Unused() {
+                          int size = MethodSample.Framework.Settings.ModSettingsLayout.ActionButtonFontSize;
+                        }
+                      }
+                    }
+                    """);
+            Files.writeString(methodSrc.resolve("Framework/UI/NativeMailActionButton.cs"), """
+                    using MethodSample.Framework.Settings;
+                    namespace MethodSample.Framework.UI {
+                      internal static class NativeMailActionButton {
+                        private static readonly int Package = new System.Random().Next();
+                        internal static void DetachSizeGears() { Fit(); }
+                        private static void Fit() { int size = ModSettingsLayout.ActionButtonFontSize; }
+                      }
+                    }
+                    """);
+            CSharpIndex methodIndex = new CSharpIndex(methodSrc);
+            ForgeSpec methodSpec = new ForgeSpec(methodSrc, "dev.test.method-prune",
+                    List.of(Path.of("Features/MarksService.cs")), base.resolve("out"),
+                    ForgeSpec.LanguageMode.EMBEDDED, "zh_cn", "", "", false, false, null, true, false);
+            DependencyPlanner.Plan methodPlan = new DependencyPlanner(methodIndex).plan(methodSpec);
+            check(methodPlan.ready(), "static method chain can be exported without host settings: " + methodPlan.errors());
+            String nativeActionSource = methodPlan.rewrittenSources().get(methodSrc.resolve("Framework/Interop/NativeActionButton.cs"));
+            String stableActionSource = methodPlan.rewrittenSources().get(methodSrc.resolve("Framework/UI/StableNativeAction.cs"));
+            check(nativeActionSource != null && nativeActionSource.contains("StretchNativeArtwork") &&
+                    !nativeActionSource.contains("void Create") && !nativeActionSource.contains("ModSettingsLayout") &&
+                    !nativeActionSource.contains("NativeColor"),
+                    "unused static methods and private nested types removed from NativeActionButton");
+            check(stableActionSource != null && stableActionSource.contains("void Scale") &&
+                    !stableActionSource.contains("void Prepare"),
+                    "transitive static helper method retained while unrelated method is removed");
+            String opaqueHelperSource = methodPlan.rewrittenSources().get(methodSrc.resolve("Framework/UI/OpaqueStaticHelper.cs"));
+            check(opaqueHelperSource != null && opaqueHelperSource.contains("void Used") &&
+                    opaqueHelperSource.contains("void Unused"),
+                    "static helper with stateful initialization is kept intact");
+            check(methodPlan.sources().stream().noneMatch(unit ->
+                    unit.file().getFileName().toString().equals("NativeMailActionButton.cs") ||
+                            unit.file().getFileName().toString().equals("ModSettingsLayout.cs")),
+                    "unused static dependency and host settings class excluded");
+            check(methodPlan.rewrittenSources().get(methodSrc.resolve("Features/MarksService.cs"))
+                    .contains("16761384u"), "host layout property replaced with its declared default");
+
             Files.writeString(src.resolve("Features/Dynamic.cs"),"namespace Sample.Features { class Dynamic { internal static void Initialize() { string key = \"x\"; string text = ModLanguageService.Translate(key); } } }");
             try {
                 new ForgeExporter().export(new ForgeSpec(src,"dev.test.dynamic",List.of(Path.of("Features/Dynamic.cs")),base.resolve("out"),
                     ForgeSpec.LanguageMode.INLINE,"en_us","","",false,false,null));
                 throw new AssertionError("dynamic localization should fail");
-            } catch(IOException ok) {check(ok.getMessage().contains("动态"),"dynamic hardcode blocked");}
+            } catch(IOException ok) {check(ok.getMessage().contains("动态") || ok.getMessage().contains("Dynamic translation"),
+                    "dynamic hardcode blocked in selected log language");}
+            List<String> localizedErrors = new ArrayList<>();
+            try {
+                new ForgeExporter().export(new ForgeSpec(src,"dev.test.dynamic.zh",List.of(Path.of("Features/Dynamic.cs")),base.resolve("out"),
+                        ForgeSpec.LanguageMode.INLINE,"en_us","","",false,false,null), new ExportObserver() {
+                    @Override
+                    public void onEvent(String kind, String message) {
+                        localizedErrors.add(message);
+                    }
+
+                    @Override
+                    public String language() {
+                        return "zh_CN";
+                    }
+                });
+                throw new AssertionError("localized dynamic localization should fail");
+            } catch (IOException expected) {
+                check(expected.getMessage().contains("预检查失败") && !expected.getMessage().contains("Preflight failed"),
+                        "preflight exception follows selected language");
+            }
             Files.writeString(src.resolve("Features/Bad.cs"),"namespace Sample.Features { class Bad { internal static void Initialize() { Plugin.Secret(); } } }");
             try {
                 new ForgeExporter().export(new ForgeSpec(src,"dev.test.bad",List.of(Path.of("Features/Bad.cs")),base.resolve("out"),
@@ -342,8 +476,18 @@ public final class CoreChecks {
                 System.setProperty("astral.modforge.dotnet", fakeSdk.toString());
                 try {
                     List<String> events = new ArrayList<>();
-                    ForgeExporter.Result built = new ForgeExporter().export(noSource,
-                            (kind, message) -> events.add(kind + ":" + message));
+                    ExportObserver chineseObserver = new ExportObserver() {
+                        @Override
+                        public void onEvent(String kind, String message) {
+                            events.add(kind + ":" + message);
+                        }
+
+                        @Override
+                        public String language() {
+                            return "zh_CN";
+                        }
+                    };
+                    ForgeExporter.Result built = new ForgeExporter().export(noSource, chineseObserver);
                     check(built.compiled() && Files.isRegularFile(built.dll()),
                             "mock DLL-only build preserves dist DLL");
                     try(Stream<Path> paths = Files.walk(built.directory())) {
@@ -352,6 +496,8 @@ public final class CoreChecks {
                     }
                     check(events.stream().anyMatch(x -> x.contains("MockBuild succeeded")),
                             "live build output observer receives compiler lines");
+                    check(events.contains("phase:检查依赖") && events.stream().noneMatch(x -> x.contains("Resolving dependencies")),
+                            "export progress messages follow the IDE language without bilingual duplicates");
                     check(Files.readString(built.directory().resolve("build.log")).contains("MockBuild succeeded"),
                             "complete build log retained alongside dist and report");
                 } finally { System.clearProperty("astral.modforge.dotnet"); }
