@@ -55,7 +55,7 @@ public class ForgeExporter {
         Path target = unusedDirectory(projects, spec.safeName());
         Files.createDirectories(target);
         Path stage = spec.exportSource() ? target : Files.createTempDirectory("astral-mod-forge-build-");
-        StringBuilder report = new StringBuilder("# Astral Mod Forge v0.4.0 导出报告 / Export report\n\n" +
+        StringBuilder report = new StringBuilder("# Astral Mod Forge v0.5.1 导出报告 / Export report\n\n" +
                 "MOD ID: `" + spec.modId() + "`\n" +
                 "源工程 / Source: `" + spec.sourceRoot() + "`\n" +
                 "输出目录 / Output: `" + target + "`\n" +
@@ -75,6 +75,8 @@ public class ForgeExporter {
                 .append("\n## 注意 / Diagnostics\n\n");
         List<String> notes = new ArrayList<>();
         notes.addAll(plan.warnings()); notes.addAll(locale.warnings());
+        StandaloneBuildSupport.Plan buildSupport = new StandaloneBuildSupport().plan(spec);
+        notes.addAll(buildSupport.notes());
         notes.add("开关在独立 MOD 中默认开启；不复制宿主的 Settings 与 Configuration 类。");
         if (spec.embedDefaultConfig())
             notes.add("内嵌默认配置：语言与已识别的设置值直接编入 DLL，不生成 .cfg 或默认 JSON；已存在的旧配置不会自动删除。");
@@ -87,7 +89,17 @@ public class ForgeExporter {
         boolean built = false, deployed = false;
         try {
             emit(observer, "phase", "生成独立工程 / Generating standalone project");
-            write(stage, "MOD.csproj", ModTemplates.csproj(spec));
+            write(stage, "MOD.csproj", ModTemplates.csproj(spec, buildSupport.references()));
+            write(stage, "NuGet.Config", buildSupport.nugetConfig());
+            write(stage, "ForgePaths.props", buildSupport.pathsProps());
+            for (var copy : buildSupport.filesToCopy().entrySet()) {
+                Path dest = stage.resolve(copy.getKey()).normalize();
+                if (!dest.startsWith(stage)) {
+                    throw new IOException("Unsafe dependency path: " + copy.getKey());
+                }
+                Files.createDirectories(dest.getParent());
+                Files.copy(copy.getValue(), dest, StandardCopyOption.REPLACE_EXISTING);
+            }
             write(stage, "Plugin.cs", ModTemplates.plugin(spec, namespace, plan.loads(), plan.updates()));
             write(stage, "ModLocalization.cs", ModTemplates.localization(spec, namespace));
             write(stage, "ModLanguageCompat.cs", ModTemplates.compatibility(namespace));
@@ -98,12 +110,12 @@ public class ForgeExporter {
                 write(stage, "Source/" + relative.toString().replace('\\', '/'), locale.sources().get(unit.file()));
             }
             if (spec.exportSource()) {
-                write(stage, ".astral-mod-forge", "Astral Mod Forge 0.4.0\n" + spec.modId() + "\n");
+                write(stage, ".astral-mod-forge", "Astral Mod Forge 0.5.1\n" + spec.modId() + "\n");
                 write(stage, "README.md", "# " + spec.modId() + "\n\n" +
-                        "独立导出工程。先检查 export-report.md，然后运行 `dotnet build -c Release`。\n\n" +
-                        "Standalone export. Check export-report.md before building.\n");
+                        "独立导出工程。检查 export-report.md 以及 ForgePaths.props 中的 ForgeInteropDir；运行 `dotnet restore --configfile NuGet.Config`、`dotnet build --no-restore -c Release`。\n\n" +
+                        "Check export-report.md and ForgePaths.props. Restore with NuGet.Config, then build.\n");
             }
-            StringBuilder manifest = new StringBuilder("# Astral Mod Forge v0.4.0 / 导出清单\n" +
+            StringBuilder manifest = new StringBuilder("# Astral Mod Forge v0.5.1 / 导出清单\n" +
                     "id=" + spec.modId() + "\n" + "language=" + spec.languageMode() + "\n" +
                     "locale=" + spec.locale() + "\n" + "source=" + spec.exportSource() + "\n" +
                     "embeddedDefaults=" + spec.embedDefaultConfig() + "\n" +
@@ -114,61 +126,65 @@ public class ForgeExporter {
             write(target, "export-manifest.properties", manifest.toString());
             if (observer.isCancelled()) throw new IOException("用户取消导出 / Export cancelled");
             if (spec.build()) {
-                emit(observer, "phase", "开始编译 / Running dotnet build");
+                emit(observer, "phase", "还原 NuGet 依赖 / Restoring NuGet packages");
                 if (!commandAvailable(dotnetCommand())) {
-                    report.append("- 未发现 dotnet SDK，未编译 DLL / dotnet SDK unavailable.\n");
-                    notes.add("未安装 dotnet SDK / dotnet unavailable");
-                    emit(observer, "warning", "未找到 dotnet SDK，未生成 DLL / dotnet SDK unavailable; no DLL produced");
-                } else {
-                    ProcessBuilder pb = new ProcessBuilder(dotnetCommand(), "build", stage.resolve("MOD.csproj").toString(),
-                            "-c", "Release", "--nologo", "-v", "minimal");
-                    pb.directory(stage.toFile()); pb.redirectErrorStream(true);
-                    Process process = pb.start();
-                    Path buildLog = target.resolve("build.log");
-                    Thread reader = Thread.ofVirtual().name("astral-forge-build-output").start(() -> {
-                        try (BufferedReader lines = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
-                             BufferedWriter log = Files.newBufferedWriter(buildLog, StandardCharsets.UTF_8)) {
-                            String line;
-                            while ((line = lines.readLine()) != null) {
-                                log.write(line); log.newLine(); log.flush();
-                                observer.onEvent("log", line);
-                            }
-                        } catch (IOException ex) {
-                            emit(observer, "warning", "构建日志读取失败 / Build output error: " + ex.getMessage());
-                        }
-                    });
-                    boolean finished = false, cancelled = false, timedOut = false;
-                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(300);
-                    while (!(finished = process.waitFor(1, TimeUnit.SECONDS))) {
-                        if (observer.isCancelled()) { cancelled = true; break; }
-                        if (System.nanoTime() >= deadline) { timedOut = true; break; }
-                    }
-                    if (!finished) {
-                        process.destroyForcibly();
-                        process.waitFor(5, TimeUnit.SECONDS);
-                    }
-                    reader.join(2000);
-                    if (cancelled) {
-                        throw new IOException(ForgeText.select("用户取消编译 / Build cancelled", observer.language()));
-                    }
-                    Path dll = stage.resolve("bin/Release/net6.0/" + spec.safeName() + ".dll");
-                    if (timedOut) report.append("- 编译超时（300 秒），查看 build.log / Build timeout.\n");
-                    else if (process.exitValue() != 0) report.append("- 编译失败，退出码 ")
-                            .append(process.exitValue()).append("，查看 build.log / Build failed.\n");
-                    else if (!Files.isRegularFile(dll)) report.append("- 未产生预期 DLL / Expected DLL is missing.\n");
-                    else {
-                        Files.createDirectories(outputDll.getParent());
-                        Files.copy(dll, outputDll, StandardCopyOption.REPLACE_EXISTING);
-                        Path sdk = dll.getParent().resolve("AstralParty.Modding.SDK.dll");
-                        if (Files.isRegularFile(sdk)) {
-                            Files.copy(sdk, outputDll.getParent().resolve(sdk.getFileName()), StandardCopyOption.REPLACE_EXISTING);
-                            report.append("- 包含 SDK 依赖 DLL，请确认与其它 MOD 不冲突。\n");
-                        }
-                        built = true;
-                        report.append("- 编译成功 / Build succeeded: `").append(outputDll).append("`\n");
-                    }
+                    throw new IOException(ForgeText.select(
+                            "未找到 dotnet SDK，请安装 .NET SDK，或取消编译仅导出源码 / "
+                                    + "dotnet SDK unavailable. Install the .NET SDK, or export sources without building.",
+                            observer.language()));
                 }
-            } else report.append("- 已导出源码，未执行编译 / Source-only export.\n");
+                if (buildSupport.interopDir() == null) {
+                    throw new IOException(ForgeText.select(
+                            "找不到游戏 BepInEx/interop 目录。请在 ForgePaths.props 设置 ForgeInteropDir，"
+                                    + "并确保存在 Il2Cppmscorlib.dll、UnityEngine.CoreModule.dll 和 UnityEngine.InputLegacyModule.dll / "
+                                    + "Game interop directory is missing. Set ForgeInteropDir in ForgePaths.props, "
+                                    + "with Il2Cppmscorlib.dll, UnityEngine.CoreModule.dll and UnityEngine.InputLegacyModule.dll.",
+                            observer.language()));
+                }
+
+                Path buildLog = target.resolve("build.log");
+                List<String> restore = List.of(dotnetCommand(), "restore", stage.resolve("MOD.csproj").toString(),
+                        "--configfile", stage.resolve("NuGet.Config").toString(), "--nologo", "-v", "minimal");
+                int restoreExit = runCommand(restore, stage, buildLog, observer);
+                if (restoreExit != 0) {
+                    throw new IOException(ForgeText.select(
+                            "NuGet 还原失败（退出码 " + restoreExit + "），请查看 build.log；"
+                                    + "确认 NuGet.Config 中 BepInEx 官方源可访问 / "
+                                    + "NuGet restore failed (exit code " + restoreExit + "). Check build.log and "
+                                    + "BepInEx feed access in NuGet.Config.", observer.language()));
+                }
+
+                emit(observer, "phase", "开始编译 / Running dotnet build");
+                List<String> build = List.of(dotnetCommand(), "build", stage.resolve("MOD.csproj").toString(),
+                        "-c", "Release", "--no-restore", "--nologo", "-v", "minimal");
+                int buildExit = runCommand(build, stage, buildLog, observer);
+                if (buildExit != 0) {
+                    throw new IOException(ForgeText.select(
+                            "C# 编译失败（退出码 " + buildExit + "），请查看 build.log 和导出的工程 / "
+                                    + "C# compilation failed (exit code " + buildExit + "). See build.log and generated project.",
+                            observer.language()));
+                }
+
+                Path dll = stage.resolve("bin/Release/net6.0/" + spec.safeName() + ".dll");
+                if (!Files.isRegularFile(dll) || Files.size(dll) == 0L) {
+                    throw new IOException(ForgeText.select(
+                            "编译未生成有效 DLL，请查看 build.log / "
+                                    + "Build completed without a nonempty DLL. Check build.log.", observer.language()));
+                }
+
+                Files.createDirectories(outputDll.getParent());
+                Files.copy(dll, outputDll, StandardCopyOption.REPLACE_EXISTING);
+                Path sdk = dll.getParent().resolve("AstralParty.Modding.SDK.dll");
+                if (Files.isRegularFile(sdk)) {
+                    Files.copy(sdk, outputDll.getParent().resolve(sdk.getFileName()),
+                            StandardCopyOption.REPLACE_EXISTING);
+                    report.append("- 包含 SDK 依赖 DLL，请确认与其它 MOD 不冲突。\n");
+                }
+                built = true;
+                report.append("- 编译成功 / Build succeeded: `").append(outputDll).append("`\n");
+            } else {
+                report.append("- 已导出源码，未执行编译 / Source-only export.\n");
+            }
             if (built && spec.copyToGame()) {
                 emit(observer, "phase", "复制到游戏 / Deploying DLL");
                 StringBuilder reason = new StringBuilder();
@@ -182,12 +198,17 @@ public class ForgeExporter {
                 }
             } else if (spec.copyToGame()) report.append("- 无 DLL，未复制游戏目录 / No DLL, deployment skipped.\n");
             write(target, "export-report.md", report.toString());
-            emit(observer, "phase", built ? "编译完成 / Build complete" : "导出结束 / Export finished");
+            emit(observer, "phase", built ? "编译完成 / Build complete" : "源码导出完成 / Source export complete");
             return new Result(target, target.resolve("export-report.md"), built ? outputDll : null,
                     built, deployed, List.copyOf(notes));
         } catch (Exception ex) {
-            write(target, "export-report.md", report.append("\n## 错误 / Error\n\n").append(ex).append('\n').toString());
-            throw ex;
+            report.append("\n## 错误 / Error\n\n").append(ex.getMessage()).append('\n');
+            report.append("\n编译未成功；未复制 DLL 到游戏。 / Build did not succeed; no DLL deployed.\n");
+            Path failureReport = target.resolve("export-report.md");
+            write(target, "export-report.md", report.toString());
+            throw new IOException(ex.getMessage() + "\n" +
+                    ForgeText.select("导出诊断 / Export report", observer.language())
+                    + ": " + failureReport, ex);
         } finally {
             if (!spec.exportSource()) deleteTree(stage);
         }
@@ -205,6 +226,7 @@ public class ForgeExporter {
     }
 
     public Result createEmpty(Path workspace, String id) throws Exception {
+        Files.createDirectories(workspace);
         Path base = workspace.resolve("AstralModForge");
         // Prevent new project's .cs files from being glob-compiled into the host MOD project.
         // 若 Rider 打开的是 .csproj 根目录，新项目默认输出到同级目录。
@@ -219,7 +241,18 @@ public class ForgeExporter {
         Files.createDirectories(destination);
         String namespace=spec.pluginNamespace();
         DependencyPlanner.Entry load = new DependencyPlanner.Entry(namespace+".Features.SampleFeature", "Initialize", true, false, "Load");
-        write(destination, spec.safeName()+".csproj", ModTemplates.csproj(spec));
+        StandaloneBuildSupport.Plan support = new StandaloneBuildSupport().plan(spec);
+        write(destination, spec.safeName()+".csproj", ModTemplates.csproj(spec, support.references()));
+        write(destination, "NuGet.Config", support.nugetConfig());
+        write(destination, "ForgePaths.props", support.pathsProps());
+        for (var copy : support.filesToCopy().entrySet()) {
+            Path path = destination.resolve(copy.getKey()).normalize();
+            if (!path.startsWith(destination)) {
+                throw new IOException("Unsafe dependency path: " + copy.getKey());
+            }
+            Files.createDirectories(path.getParent());
+            Files.copy(copy.getValue(), path, StandardCopyOption.REPLACE_EXISTING);
+        }
         write(destination, "Plugin.cs", ModTemplates.plugin(spec, namespace, List.of(load), List.of()));
         write(destination, "ModLocalization.cs", ModTemplates.localization(spec, namespace));
         write(destination, "Features/SampleFeature.cs", "// 删除此示例后，请同步修改 Plugin.Load 的调用。\n" +
@@ -234,13 +267,13 @@ public class ForgeExporter {
         write(destination, "lang/zh_cn.json", JsonFlat.write(Map.of(id+".sample.loaded", "示例功能已初始化")));
         write(destination, "lang/en_us.json", JsonFlat.write(Map.of(id+".sample.loaded", "Sample feature initialized")));
         write(destination, ".gitignore", "bin/\nobj/\n.idea/\n*.user\n");
-        write(destination, ".astral-mod-forge", "Astral Mod Forge 0.4.0\n"+id+"\n");
+        write(destination, ".astral-mod-forge", "Astral Mod Forge 0.5.1\n"+id+"\n");
         write(destination, "README.md", "# " + id + "\n\n" +
-            "生成的 BepInEx Unity IL2CPP 独立 MOD 项目。使用 Rider 打开 `"+spec.safeName()+".csproj`，执行 `dotnet build -c Release`。\n" +
+            "生成的 BepInEx Unity IL2CPP 独立 MOD 项目。使用 Rider 打开 `"+spec.safeName()+".csproj`，先在 ForgePaths.props 配置游戏的 BepInEx/interop 路径，再执行 `dotnet restore --configfile NuGet.Config` 和 `dotnet build -c Release --no-restore`。\n" +
             "\nGenerated standalone BepInEx IL2CPP project. Build with .NET 6 SDK.\n" +
             "\n**请核对游戏运行的 BepInEx / SNWCreations 包版本，并避免加载与原 MOD 重复的功能。**\n");
         write(destination, "export-report.md", "# New project / 新建项目\n\nMOD ID: `"+id+"`\n\n" +
-            "编译：`dotnet build -c Release`；安装目标：游戏根目录/BepInEx/plugins/。\n");
+            "配置：`ForgePaths.props`；还原：`dotnet restore --configfile NuGet.Config`；编译：`dotnet build --no-restore -c Release`。\n");
         return new Result(destination, destination.resolve("export-report.md"), null, false, false, List.of());
     }
 
@@ -272,6 +305,59 @@ public class ForgeExporter {
     private static String dotnetCommand() {
         // Allows a non-PATH SDK and isolated integration tests without modifying project settings.
         return System.getProperty("astral.modforge.dotnet", "dotnet");
+    }
+
+    /** Runs restore and compile separately; both phases append to a single actionable build.log. */
+    private static int runCommand(List<String> command, Path directory, Path buildLog,
+                                  ExportObserver observer) throws IOException, InterruptedException {
+        try (BufferedWriter log = Files.newBufferedWriter(buildLog, StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+            String header = "$ " + String.join(" ", command);
+            log.write(header);
+            log.newLine();
+            log.flush();
+            observer.onEvent("log", header);
+        }
+        ProcessBuilder builder = new ProcessBuilder(command);
+        builder.directory(directory.toFile());
+        builder.redirectErrorStream(true);
+        Process process = builder.start();
+        Thread reader = Thread.ofVirtual().name("astral-forge-dotnet-output").start(() -> {
+            try (BufferedReader lines = new BufferedReader(new InputStreamReader(
+                    process.getInputStream(), StandardCharsets.UTF_8));
+                 BufferedWriter log = Files.newBufferedWriter(buildLog, StandardCharsets.UTF_8,
+                         StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+                String line;
+                while ((line = lines.readLine()) != null) {
+                    log.write(line);
+                    log.newLine();
+                    log.flush();
+                    observer.onEvent("log", line);
+                }
+            } catch (IOException exception) {
+                emit(observer, "warning", "构建日志读取失败 / Build output error: " + exception.getMessage());
+            }
+        });
+        boolean completed = false;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(300);
+        try {
+            while (!(completed = process.waitFor(1, TimeUnit.SECONDS))) {
+                if (observer.isCancelled()) {
+                    throw new IOException(ForgeText.select("用户取消编译 / Build cancelled", observer.language()));
+                }
+                if (System.nanoTime() >= deadline) {
+                    throw new IOException(ForgeText.select("编译超时（300秒） / Build timed out after 300 seconds",
+                            observer.language()));
+                }
+            }
+            return process.exitValue();
+        } finally {
+            if (!completed) {
+                process.destroyForcibly();
+                process.waitFor(5, TimeUnit.SECONDS);
+            }
+            reader.join(3000);
+        }
     }
 
     private static boolean commandAvailable(String name) {
